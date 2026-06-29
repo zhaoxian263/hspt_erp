@@ -1,3 +1,8 @@
+// 设置 Day.js 为中文
+if (window.dayjs) {
+  window.dayjs.locale('zh-cn');
+}
+
 // 确保 Element Plus 命令式 API 可用
 const ElMessage = window.ElMessage || ElementPlus.ElMessage;
 const ElMessageBox = window.ElMessageBox || ElementPlus.ElMessageBox;
@@ -264,7 +269,8 @@ const InboundPage = {
     onSearch() { this.page = 1; this.loadData(); },
     onPageChange(p) { this.page = p; this.loadData(); },
     openAdd() {
-      this.form = { consumable_id: null, batch_number: '', production_date: '', expiry_date: '', quantity: 1, operator: '', remark: '' };
+      const now = new Date().toISOString().slice(0, 16);
+      this.form = { consumable_id: null, batch_number: '', production_date: '', expiry_date: '', quantity: 1, operator: '', inbound_time: now, remark: '' };
       this.dialogVisible = true;
     },
     gotoExcel() { this.$router.push('/excel'); },
@@ -327,6 +333,7 @@ const InboundPage = {
             <el-col :span="12"><el-form-item label="失效日期"><el-date-picker v-model="form.expiry_date" type="date" value-format="YYYY-MM-DD" style="width:100%" /></el-form-item></el-col>
           </el-row>
           <el-form-item label="经办人"><el-input v-model="form.operator" /></el-form-item>
+          <el-form-item label="入库时间"><el-date-picker v-model="form.inbound_time" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width:100%" /></el-form-item>
           <el-form-item label="备注"><el-input v-model="form.remark" /></el-form-item>
         </el-form>
         <template #footer>
@@ -553,7 +560,7 @@ const InventoryPage = {
           <el-col :span="5">
             <el-select v-model="statusFilter" placeholder="状态筛选" clearable @change="onSearch" style="width:100%">
               <el-option label="全部" value="all" /><el-option label="库存正常" value="normal" />
-              <el-option label="库存预警" value="warning" /><el-option label="库存不足" value="low" />
+              <el-option label="库存不足/预警" value="low_or_warning" />
               <el-option label="近效期" value="expiry_warning" /><el-option label="已过期" value="expired" />
             </el-select>
           </el-col>
@@ -705,5 +712,7 @@ const router = VueRouter.createRouter({
 });
 
 app.use(router);
-app.use(ElementPlus);
+// 设置 Element Plus 为中文
+app.use(ElementPlus, { locale: window.ElementPlusLocaleZhCn });
+
 app.mount('#app');

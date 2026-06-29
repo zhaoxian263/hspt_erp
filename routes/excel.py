@@ -37,12 +37,12 @@ def download_inbound_template():
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = '入库记录'
-    headers = ['耗材编号', '批号', '生产日期', '失效日期', '入库数量', '经办人', '备注']
+    headers = ['耗材编号', '批号', '生产日期', '失效日期', '入库数量', '经办人', '入库时间', '备注']
     ws.append(headers)
 
     # 示例数据
-    ws.append(['HC2027070101', 'LOT20270101', '2026-06-01', '2028-06-01', 100, '张三', ''])
-    ws.append(['HC2027070102', 'LOT20270102', '2026-06-15', '2029-06-15', 50, '李四', ''])
+    ws.append(['HC2027070101', 'LOT20270101', '2026-06-01', '2028-06-01', 100, '张三', '2026-06-29 10:30:00', ''])
+    ws.append(['HC2027070102', 'LOT20270102', '2026-06-15', '2029-06-15', 50, '李四', '2026-06-28 14:00:00', ''])
 
     output = io.BytesIO()
     wb.save(output)
@@ -351,6 +351,7 @@ def import_inbound():
         '失效日期': ['失效日期', '有效期至', '有效期', 'expiry_date'],
         '入库数量': ['入库数量', '数量', 'quantity'],
         '经办人': ['经办人', 'operator'],
+        '入库时间': ['入库时间', 'inbound_time'],
         '备注': ['备注', 'remark'],
     }
     col_idx = {}
@@ -364,7 +365,7 @@ def import_inbound():
     if '耗材编号' not in col_idx or '入库数量' not in col_idx:
         return jsonify({'error': 'Excel缺少必填列：耗材编号、入库数量'}), 400
 
-    from routes.stock import _parse_date
+    from routes.stock import _parse_date, _parse_datetime
     success = 0
     errors = []
 
@@ -391,6 +392,7 @@ def import_inbound():
             production_date = _parse_date(row.get(col_idx.get('生产日期')))
             expiry_date = _parse_date(row.get(col_idx.get('失效日期')))
             operator = str(row.get(col_idx.get('经办人'), '')).strip()
+            inbound_time = _parse_datetime(row.get(col_idx.get('入库时间')))
             remark = str(row.get(col_idx.get('备注'), '')).strip()
 
             # 创建入库记录
@@ -401,6 +403,7 @@ def import_inbound():
                 expiry_date=expiry_date,
                 quantity=quantity,
                 operator=operator,
+                inbound_time=inbound_time,
                 remark=remark,
             )
             db.session.add(record)

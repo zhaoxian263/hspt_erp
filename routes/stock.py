@@ -273,7 +273,7 @@ def list_inventory():
     page = request.args.get('page', 1, type=int)
     page_size = request.args.get('page_size', 50, type=int)
     keyword = request.args.get('keyword', '').strip()
-    status_filter = request.args.get('status', '').strip()  # all/normal/warning/low/expiry_warning/expired
+    status_filter = request.args.get('status', '').strip()  # all/normal/low_or_warning/expiry_warning/expired
 
     query = Consumable.query
     if keyword:
@@ -294,9 +294,7 @@ def list_inventory():
         # 状态过滤
         if status_filter == 'normal' and item['stock_status'] != '库存正常':
             continue
-        elif status_filter == 'warning' and item['stock_status'] != '库存预警':
-            continue
-        elif status_filter == 'low' and item['stock_status'] != '库存不足':
+        elif status_filter == 'low_or_warning' and item['stock_status'] not in ('库存不足', '库存预警'):
             continue
         elif status_filter == 'expiry_warning' and item['expiry_status'] != '近效期':
             continue

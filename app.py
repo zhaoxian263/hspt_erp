@@ -51,5 +51,5 @@ def init_db(app):
 if __name__ == '__main__':
     app = create_app()
     init_db(app)
-    print('🏥 安居卫生院护理部耗材管理系统已启动 → http://localhost:5000')
+    print('🏥 安居镇中心卫生院护理部耗材管理系统已启动 → http://localhost:5000')
     app.run(host='0.0.0.0', port=5000, debug=True)
