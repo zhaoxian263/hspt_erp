@@ -52,6 +52,28 @@ def download_inbound_template():
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
 
+@excel_bp.route('/template/outbound', methods=['GET'])
+def download_outbound_template():
+    """下载出库记录导入模板"""
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = '出库记录'
+    headers = ['耗材编号', '批号', '出库数量', '领用人', '领用科室', '经办人', '出库时间', '备注']
+    ws.append(headers)
+
+    # 示例数据
+    ws.append(['HC2027070101', 'LOT20270101', 10, '张三', '门诊检验科', '李四', '2026-06-29 10:30:00', ''])
+    ws.append(['HC2027070102', 'LOT20270102', 5, '王五', '住院部', '赵六', '2026-06-28 14:00:00', ''])
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    return send_file(output, as_attachment=True,
+                     download_name='出库记录导入模板.xlsx',
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
 @excel_bp.route('/import/consumable', methods=['POST'])
 def import_consumables():
     """批量导入耗材基础信息"""
@@ -425,6 +447,127 @@ def import_inbound():
                 )
                 db.session.add(batch)
             success += 1
+        except Exception as e:
+            errors.append(f'第{row_num}行: {str(e)}')
+
+    try:
+        db.session.commit()
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': f'保存失败: {str(e)}'}), 500
+
+    return jsonify({'success': success, 'errors': errors[:20]})
+
+
+@excel_bp.route('/import/outbound', methods=['POST'])
+def import_outbound():
+    """批量导出出库记录"""
+    if 'file' not in request.files:
+        return jsonify({'error': '未找到上传文件'}), 400
+    file = request.files['file']
+    if not file.filename.endswith(('.xlsx', '.xls')):
+        return jsonify({'error': '仅支持 .xlsx / .xls 格式'}), 400
+
+    import pandas as pd
+    try:
+        df = pd.read_excel(file, sheet_name=0, dtype=str)
+        df = df.fillna('')
+    except Exception as e:
+        return jsonify({'error': f'Excel 解析失败: {str(e)}'}), 400
+
+    col_map = {
+        '耗材编号': ['耗材编号', '编号', 'code'],
+        '批号': ['批号', 'batch_number'],
+        '出库数量': ['出库数量', '数量', 'quantity'],
+        '领用人': ['领用人', 'recipient'],
+        '领用科室': ['领用科室', '科室', 'department'],
+        '经办人': ['经办人', 'operator'],
+        '出库时间': ['出库时间', 'outbound_time'],
+        '备注': ['备注', 'remark'],
+    }
+    col_idx = {}
+    columns_lower = {c.lower().strip(): c for c in df.columns}
+    for target, aliases in col_map.items():
+        for alias in aliases:
+            if alias.lower() in columns_lower:
+                col_idx[target] = columns_lower[alias.lower()]
+                break
+
+    if '耗材编号' not in col_idx or '出库数量' not in col_idx:
+        return jsonify({'error': 'Excel缺少必填列：耗材编号、出库数量'}), 400
+
+    from routes.stock import _parse_date, _parse_datetime
+    success = 0
+    errors = []
+
+    # 预加载所有耗材编号映射
+    all_consumables = {c.code: c for c in Consumable.query.all()}
+
+    for i, row in df.iterrows():
+        row_num = i + 2
+        try:
+            code = str(row.get(col_idx.get('耗材编号'), '')).strip()
+            quantity_val = row.get(col_idx.get('出库数量'), '0')
+            try:
+                quantity = int(float(str(quantity_val)))
+            except (ValueError, TypeError):
+                errors.append(f'第{row_num}行: 数量格式错误')
+                continue
+
+            consumable = all_consumables.get(code)
+            if not consumable:
+                errors.append(f'第{row_num}行: 耗材编号 {code} 不存在')
+                continue
+
+            batch_number = str(row.get(col_idx.get('批号'), '')).strip()
+            recipient = str(row.get(col_idx.get('领用人'), '')).strip()
+            department = str(row.get(col_idx.get('领用科室'), '')).strip()
+            operator = str(row.get(col_idx.get('经办人'), '')).strip()
+            outbound_time = _parse_datetime(row.get(col_idx.get('出库时间')))
+            remark = str(row.get(col_idx.get('备注'), '')).strip()
+
+            # 创建出库记录
+            record = OutboundRecord(
+                consumable_id=consumable.id,
+                batch_number=batch_number,
+                quantity=quantity,
+                recipient=recipient,
+                department=department,
+                operator=operator,
+                outbound_time=outbound_time,
+                remark=remark,
+            )
+            db.session.add(record)
+
+            # 扣减库存批次
+            from models import StockBatch
+            if batch_number:
+                batch = StockBatch.query.filter_by(
+                    consumable_id=consumable.id,
+                    batch_number=batch_number,
+                ).first()
+                if batch and batch.quantity >= quantity:
+                    batch.quantity -= quantity
+                    success += 1
+                else:
+                    errors.append(f'第{row_num}行: 批号 {batch_number} 库存不足')
+            else:
+                # 自动先进先出
+                batches = StockBatch.query.filter(
+                    StockBatch.consumable_id == consumable.id,
+                    StockBatch.quantity > 0
+                ).order_by(StockBatch.expiry_date, StockBatch.id).all()
+                remaining = quantity
+                for batch in batches:
+                    if remaining <= 0:
+                        break
+                    deduct = min(batch.quantity, remaining)
+                    batch.quantity -= deduct
+                    remaining -= deduct
+                if remaining > 0:
+                    errors.append(f'第{row_num}行: 库存不足，缺少 {remaining} 件')
+                else:
+                    success += 1
         except Exception as e:
             errors.append(f'第{row_num}行: {str(e)}')
 

@@ -29,6 +29,8 @@ const API = {
   // Excel
   tplConsumable: '/api/excel/template/consumable',
   tplInbound: '/api/excel/template/inbound',
+  tplOutbound: '/api/excel/template/outbound',
+  importOutbound: '/api/excel/import/outbound',
   importConsumable: '/api/excel/import/consumable',
   importInbound: '/api/excel/import/inbound',
   exportConsumable: '/api/excel/export/consumable',
@@ -369,7 +371,8 @@ const OutboundPage = {
     onSearch() { this.page = 1; this.loadData(); },
     onPageChange(p) { this.page = p; this.loadData(); },
     openAdd() {
-      this.form = { consumable_id: null, batch_number: '', quantity: 1, recipient: '', department: '', operator: '', remark: '' };
+      const now = new Date().toISOString().slice(0, 16);
+      this.form = { consumable_id: null, batch_number: '', quantity: 1, recipient: '', department: '', operator: '', outbound_time: now, remark: '' };
       this.dialogVisible = true;
     },
     async saveForm() {
@@ -384,6 +387,7 @@ const OutboundPage = {
       if (res.ok) { ElMessage.success('删除成功'); this.loadData(); }
       else { const err = await res.json(); ElMessage.error(err.error); }
     },
+    gotoExcel() { this.$router.push('/excel'); },
   },
   template: `
     <div>
@@ -394,6 +398,7 @@ const OutboundPage = {
           <el-col :span="6">
             <el-button type="primary" @click="onSearch">搜索</el-button>
             <el-button type="success" @click="openAdd">新增出库</el-button>
+            <el-button @click="gotoExcel">Excel导入</el-button>
           </el-col>
         </el-row>
       </div>
@@ -434,6 +439,7 @@ const OutboundPage = {
             </el-form-item></el-col>
           </el-row>
           <el-form-item label="经办人"><el-input v-model="form.operator" /></el-form-item>
+          <el-form-item label="出库时间"><el-date-picker v-model="form.outbound_time" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" style="width:100%" /></el-form-item>
           <el-form-item label="备注"><el-input v-model="form.remark" /></el-form-item>
         </el-form>
         <template #footer>
@@ -638,53 +644,83 @@ const ExcelPage = {
       } catch(e) { ElMessage.error('导入失败'); }
       this.importLoading = false;
     },
+    async handleImportOutbound(file) {
+      this.importLoading = true; this.importResult = null;
+      const fd = new FormData(); fd.append('file', file.raw);
+      try {
+        const res = await fetch(API.importOutbound, { method: 'POST', body: fd });
+        this.importResult = await res.json();
+        if (this.importResult.success > 0) ElMessage.success(`出库导入完成: 成功${this.importResult.success}条`);
+      } catch(e) { ElMessage.error('导入失败'); }
+      this.importLoading = false;
+    },
   },
   template: `
     <div>
       <h3 class="page-title">Excel导入导出</h3>
       <el-row :gutter="20">
-        <el-col :span="12">
-          <el-card shadow="hover" style="margin-bottom:20px">
-            <template #header><span>📥 导入耗材基础信息</span></template>
-            <el-radio-group v-model="importMode" style="margin-bottom:12px">
-              <el-radio value="skip">跳过已有编号</el-radio>
-              <el-radio value="update">更新已有编号</el-radio>
-            </el-radio-group>
-            <el-upload :auto-upload="false" accept=".xlsx,.xls" :show-file-list="false" :on-change="handleImportConsumable" :disabled="importLoading">
-              <el-button type="primary" :loading="importLoading">选择Excel文件导入耗材</el-button>
-            </el-upload>
-            <div style="margin-top:8px"><el-button link type="info" @click="downloadTemplate('tplConsumable')">下载导入模板</el-button></div>
-          </el-card>
+        <!-- 左侧：导入区域 -->
+        <el-col :span="14">
           <el-card shadow="hover">
-            <template #header><span>📥 批量导入入库记录</span></template>
-            <el-upload :auto-upload="false" accept=".xlsx,.xls" :show-file-list="false" :on-change="handleImportInbound" :disabled="importLoading">
-              <el-button type="primary" :loading="importLoading">选择Excel文件导入入库</el-button>
-            </el-upload>
-            <div style="margin-top:8px"><el-button link type="info" @click="downloadTemplate('tplInbound')">下载导入模板</el-button></div>
+            <template #header><span>📥 数据导入</span></template>
+            <!-- 耗材基础信息 -->
+            <div class="import-section">
+              <div class="import-section-title">耗材基础信息</div>
+              <el-radio-group v-model="importMode" style="margin-bottom:12px">
+                <el-radio value="skip">跳过已有编号</el-radio>
+                <el-radio value="update">更新已有编号</el-radio>
+              </el-radio-group>
+              <el-upload :auto-upload="false" accept=".xlsx,.xls" :show-file-list="false" :on-change="handleImportConsumable" :disabled="importLoading">
+                <el-button type="primary" :loading="importLoading">选择Excel文件</el-button>
+              </el-upload>
+              <div style="margin-top:8px"><el-button link type="info" @click="downloadTemplate('tplConsumable')">下载模板</el-button></div>
+            </div>
+            <el-divider />
+            <!-- 入库记录 -->
+            <div class="import-section">
+              <div class="import-section-title">入库记录</div>
+              <el-upload :auto-upload="false" accept=".xlsx,.xls" :show-file-list="false" :on-change="handleImportInbound" :disabled="importLoading">
+                <el-button type="primary" :loading="importLoading">选择Excel文件</el-button>
+              </el-upload>
+              <div style="margin-top:8px"><el-button link type="info" @click="downloadTemplate('tplInbound')">下载模板</el-button></div>
+            </div>
+            <el-divider />
+            <!-- 出库记录 -->
+            <div class="import-section">
+              <div class="import-section-title">出库记录</div>
+              <el-upload :auto-upload="false" accept=".xlsx,.xls" :show-file-list="false" :on-change="handleImportOutbound" :disabled="importLoading">
+                <el-button type="primary" :loading="importLoading">选择Excel文件</el-button>
+              </el-upload>
+              <div style="margin-top:8px"><el-button link type="info" @click="downloadTemplate('tplOutbound')">下载模板</el-button></div>
+            </div>
           </el-card>
         </el-col>
-        <el-col :span="12">
+        <!-- 右侧：导出区域 -->
+        <el-col :span="10">
           <el-card shadow="hover">
-            <template #header><span>📤 导出数据</span></template>
-            <div style="display:flex;flex-direction:column;gap:12px">
+            <template #header><span>📤 数据导出</span></template>
+            <div class="export-buttons">
               <el-button type="success" @click="downloadExport('exportConsumable')">导出耗材基础信息</el-button>
               <el-button type="success" @click="downloadExport('exportInventory')">导出库存总览</el-button>
               <el-button type="success" @click="downloadExport('exportInbound')">导出入库记录</el-button>
               <el-button type="success" @click="downloadExport('exportOutbound')">导出出库记录</el-button>
             </div>
           </el-card>
+          <!-- 导入结果 -->
+          <el-card v-if="importResult" shadow="hover" style="margin-top:20px">
+            <template #header><span>📋 导入结果</span></template>
+            <div class="result-info">
+              <span>✅ 成功: {{ importResult.success || 0 }} 条</span>
+              <span v-if="importResult.updated">🔄 更新: {{ importResult.updated }} 条</span>
+              <span v-if="importResult.skipped">⏭️ 跳过: {{ importResult.skipped }} 条</span>
+            </div>
+            <div v-if="importResult.errors?.length" class="result-errors">
+              <p style="color:#F56C6C;margin:8px 0 4px">⚠️ 错误:</p>
+              <ul><li v-for="e in importResult.errors" :key="e">{{ e }}</li></ul>
+            </div>
+          </el-card>
         </el-col>
       </el-row>
-      <el-card v-if="importResult" shadow="hover" style="margin-top:20px">
-        <template #header><span>📋 导入结果</span></template>
-        <p>✅ 新增: {{ importResult.success || 0 }} 条</p>
-        <p>🔄 更新: {{ importResult.updated || 0 }} 条</p>
-        <p>⏭️ 跳过: {{ importResult.skipped || 0 }} 条</p>
-        <div v-if="importResult.errors?.length">
-          <p style="color:#F56C6C">⚠️ 错误:</p>
-          <ul><li v-for="e in importResult.errors" :key="e" style="color:#F56C6C;font-size:13px">{{ e }}</li></ul>
-        </div>
-      </el-card>
     </div>
   `
 };
