@@ -6,10 +6,11 @@ consumable_bp = Blueprint('consumable', __name__)
 
 @consumable_bp.route('', methods=['GET'])
 def list_consumables():
-    """耗材列表（分页 + 搜索）"""
+    """耗材列表（分页 + 搜索 + 类别筛选）"""
     page = request.args.get('page', 1, type=int)
     page_size = request.args.get('page_size', 20, type=int)
     keyword = request.args.get('keyword', '').strip()
+    category = request.args.get('category', '').strip()
     include_stock = request.args.get('include_stock', 'false').lower() == 'true'
 
     query = Consumable.query
@@ -23,6 +24,8 @@ def list_consumables():
                 Consumable.specification.contains(keyword),
             )
         )
+    if category:
+        query = query.filter(Consumable.category == category)
     query = query.order_by(Consumable.code)
     pagination = query.paginate(page=page, per_page=page_size, error_out=False)
 
@@ -60,6 +63,9 @@ def create_consumable():
         manufacturer=data.get('manufacturer'),
         specification=data.get('specification'),
         unit=data.get('unit'),
+        category=data.get('category'),
+        storage_location=data.get('storage_location'),
+        initial_stock=data.get('initial_stock', 0),
         stock_warning_value=data.get('stock_warning_value', 0),
         expiry_warning_days=data.get('expiry_warning_days', 0),
         remark=data.get('remark'),
@@ -84,6 +90,7 @@ def update_consumable(consumable_id):
         c.code = data['code']
 
     for field in ['name', 'brand', 'manufacturer', 'specification', 'unit',
+                  'category', 'storage_location', 'initial_stock',
                   'stock_warning_value', 'expiry_warning_days', 'remark']:
         if field in data:
             setattr(c, field, data[field])

@@ -1,5 +1,6 @@
 import os
 import sys
+import sqlite3
 from flask import Flask, render_template, send_from_directory
 from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_TRACK_MODIFICATIONS, SECRET_KEY, MAX_CONTENT_LENGTH
 from models import db
@@ -31,13 +32,61 @@ def create_app():
     return app
 
 
+def _migrate_db(db_path):
+    """对已有 SQLite 数据库执行增量迁移（添加新列）"""
+    if not os.path.exists(db_path):
+        return
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    # 需要添加的新列: {表名: [(列名, 列类型), ...]}
+    migrations = {
+        'consumable': [
+            ('category', 'VARCHAR(100)'),
+            ('storage_location', 'VARCHAR(200)'),
+            ('initial_stock', 'INTEGER DEFAULT 0'),
+        ],
+        'inbound_record': [
+            ('document_number', 'VARCHAR(50)'),
+            ('storage_location', 'VARCHAR(200)'),
+        ],
+        'outbound_record': [
+            ('document_number', 'VARCHAR(50)'),
+        ],
+        'stock_batch': [
+            ('storage_location', 'VARCHAR(200)'),
+        ],
+    }
+    for table, columns in migrations.items():
+        # 检查表是否存在
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        if cursor.fetchone() is None:
+            continue
+        # 获取已有列名
+        cursor.execute(f"PRAGMA table_info({table})")
+        existing = {row[1] for row in cursor.fetchall()}
+        for col_name, col_type in columns:
+            if col_name not in existing:
+                try:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+                    print(f'  ✅ {table}.{col_name} 已添加')
+                except sqlite3.OperationalError:
+                    pass
+    conn.commit()
+    conn.close()
+
+
 def init_db(app):
-    """初始化数据库（创建表 + 默认科室）"""
+    """初始化数据库（创建表 + 迁移 + 默认数据）"""
     with app.app_context():
-        os.makedirs(os.path.dirname(app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')), exist_ok=True)
+        db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
+        os.makedirs(os.path.dirname(db_path), exist_ok=True)
+        # 确保所有模型已加载，db.create_all() 才能创建对应表
+        from models import (db, Consumable, StockBatch, InboundRecord, OutboundRecord,
+                            Department, Category, Staff, InventoryCheck, InventoryCheckItem)
         db.create_all()
+        # 对已有数据库执行增量迁移
+        _migrate_db(db_path)
         # 首次运行时初始化默认科室
-        from models import Department
         if Department.query.count() == 0:
             defaults = ['门诊检验科', '住院部', '手术室', '急诊科', 'ICU', '儿科',
                         '妇产科', '骨科', '内科', '外科', '药房', '行政后勤']
@@ -45,6 +94,13 @@ def init_db(app):
                 db.session.add(Department(name=name, sort_order=idx))
             db.session.commit()
             print('✅ 已初始化默认科室')
+        # 首次运行时初始化默认类别
+        if Category.query.count() == 0:
+            defaults = ['一次性耗材', '试剂耗材', '敷料耗材', '器械耗材', '药品耗材', '其他耗材']
+            for idx, name in enumerate(defaults):
+                db.session.add(Category(name=name, sort_order=idx))
+            db.session.commit()
+            print('✅ 已初始化默认类别')
         print('✅ 数据库初始化完成')
 
 

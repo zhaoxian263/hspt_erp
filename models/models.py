@@ -1,7 +1,51 @@
-from datetime import datetime
+from datetime import datetime, date
 from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
+
+
+class Category(db.Model):
+    """耗材类别"""
+    __tablename__ = 'category'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(100), unique=True, nullable=False, comment='类别名称')
+    sort_order = db.Column(db.Integer, default=0, comment='排序序号')
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'name': self.name,
+            'sort_order': self.sort_order,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+        }
+
+
+class Staff(db.Model):
+    """人员管理"""
+    __tablename__ = 'staff'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(100), nullable=False, comment='姓名')
+    department_id = db.Column(db.Integer, db.ForeignKey('department.id'), nullable=True, comment='所属科室ID')
+    role = db.Column(db.String(200), nullable=True, comment='角色（经办人/领用人/责任人，逗号分隔）')
+    sort_order = db.Column(db.Integer, default=0, comment='排序序号')
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    department = db.relationship('Department', backref='staffs')
+
+    def to_dict(self):
+        data = {
+            'id': self.id,
+            'name': self.name,
+            'department_id': self.department_id,
+            'department_name': self.department.name if self.department else None,
+            'role': self.role,
+            'sort_order': self.sort_order,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+        }
+        return data
 
 
 class Consumable(db.Model):
@@ -15,6 +59,9 @@ class Consumable(db.Model):
     manufacturer = db.Column(db.String(200), nullable=True, comment='生产厂家')
     specification = db.Column(db.String(200), nullable=True, comment='规格型号')
     unit = db.Column(db.String(50), nullable=True, comment='单位')
+    category = db.Column(db.String(100), nullable=True, comment='耗材类别')
+    storage_location = db.Column(db.String(200), nullable=True, comment='存放位置')
+    initial_stock = db.Column(db.Integer, default=0, comment='期初数量')
     stock_warning_value = db.Column(db.Integer, default=0, comment='库存预警值')
     expiry_warning_days = db.Column(db.Integer, default=0, comment='近效期预警天数')
     remark = db.Column(db.Text, nullable=True, comment='备注')
@@ -67,7 +114,6 @@ class Consumable(db.Model):
     @property
     def expiry_status(self):
         """效期状态: 正常/近效期/已过期"""
-        from datetime import date
         today = date.today()
         nearest_expiry = db.session.query(db.func.min(StockBatch.expiry_date)) \
             .filter(StockBatch.consumable_id == self.id,
@@ -92,6 +138,9 @@ class Consumable(db.Model):
             'manufacturer': self.manufacturer,
             'specification': self.specification,
             'unit': self.unit,
+            'category': self.category,
+            'storage_location': self.storage_location,
+            'initial_stock': self.initial_stock,
             'stock_warning_value': self.stock_warning_value,
             'expiry_warning_days': self.expiry_warning_days,
             'remark': self.remark,
@@ -137,6 +186,7 @@ class StockBatch(db.Model):
     production_date = db.Column(db.Date, nullable=True, comment='生产日期')
     expiry_date = db.Column(db.Date, nullable=True, comment='失效日期')
     quantity = db.Column(db.Integer, default=0, comment='当前库存数量')
+    storage_location = db.Column(db.String(200), nullable=True, comment='存放位置')
     remark = db.Column(db.Text, nullable=True, comment='备注')
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
@@ -149,6 +199,7 @@ class StockBatch(db.Model):
             'production_date': self.production_date.strftime('%Y-%m-%d') if self.production_date else None,
             'expiry_date': self.expiry_date.strftime('%Y-%m-%d') if self.expiry_date else None,
             'quantity': self.quantity,
+            'storage_location': self.storage_location,
             'remark': self.remark,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }
@@ -166,11 +217,13 @@ class InboundRecord(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     consumable_id = db.Column(db.Integer, db.ForeignKey('consumable.id'), nullable=False, comment='耗材ID')
+    document_number = db.Column(db.String(50), unique=True, nullable=True, comment='入库单号')
     batch_number = db.Column(db.String(100), nullable=True, comment='批号')
     production_date = db.Column(db.Date, nullable=True, comment='生产日期')
     expiry_date = db.Column(db.Date, nullable=True, comment='失效日期')
     quantity = db.Column(db.Integer, nullable=False, comment='入库数量')
     operator = db.Column(db.String(100), nullable=True, comment='经办人')
+    storage_location = db.Column(db.String(200), nullable=True, comment='存放位置')
     inbound_time = db.Column(db.DateTime, default=datetime.now, comment='入库时间')
     remark = db.Column(db.Text, nullable=True, comment='备注')
 
@@ -178,11 +231,13 @@ class InboundRecord(db.Model):
         data = {
             'id': self.id,
             'consumable_id': self.consumable_id,
+            'document_number': self.document_number,
             'batch_number': self.batch_number,
             'production_date': self.production_date.strftime('%Y-%m-%d') if self.production_date else None,
             'expiry_date': self.expiry_date.strftime('%Y-%m-%d') if self.expiry_date else None,
             'quantity': self.quantity,
             'operator': self.operator,
+            'storage_location': self.storage_location,
             'inbound_time': self.inbound_time.strftime('%Y-%m-%d %H:%M:%S') if self.inbound_time else None,
             'remark': self.remark,
         }
@@ -200,6 +255,7 @@ class OutboundRecord(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     consumable_id = db.Column(db.Integer, db.ForeignKey('consumable.id'), nullable=False, comment='耗材ID')
+    document_number = db.Column(db.String(50), unique=True, nullable=True, comment='出库单号')
     batch_number = db.Column(db.String(100), nullable=True, comment='批号')
     quantity = db.Column(db.Integer, nullable=False, comment='出库数量')
     recipient = db.Column(db.String(100), nullable=True, comment='领用人')
@@ -212,6 +268,7 @@ class OutboundRecord(db.Model):
         data = {
             'id': self.id,
             'consumable_id': self.consumable_id,
+            'document_number': self.document_number,
             'batch_number': self.batch_number,
             'quantity': self.quantity,
             'recipient': self.recipient,
@@ -225,4 +282,65 @@ class OutboundRecord(db.Model):
             data['consumable_code'] = self.consumable.code
             data['consumable_spec'] = self.consumable.specification
             data['consumable_unit'] = self.consumable.unit
+        return data
+
+
+class InventoryCheck(db.Model):
+    """盘点主表"""
+    __tablename__ = 'inventory_check'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    check_date = db.Column(db.Date, nullable=False, comment='盘点日期')
+    status = db.Column(db.String(20), default='draft', comment='状态：draft/confirmed')
+    remark = db.Column(db.Text, nullable=True, comment='备注')
+    created_at = db.Column(db.DateTime, default=datetime.now)
+
+    items = db.relationship('InventoryCheckItem', backref='check', lazy='dynamic',
+                            cascade='all, delete-orphan')
+
+    def to_dict(self, include_items=False):
+        data = {
+            'id': self.id,
+            'check_date': self.check_date.strftime('%Y-%m-%d') if self.check_date else None,
+            'status': self.status,
+            'remark': self.remark,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
+        }
+        if include_items:
+            data['items'] = [item.to_dict() for item in self.items.all()]
+        else:
+            data['item_count'] = self.items.count()
+        return data
+
+
+class InventoryCheckItem(db.Model):
+    """盘点明细"""
+    __tablename__ = 'inventory_check_item'
+
+    id = db.Column(db.Integer, primary_key=True, autoincrement=True)
+    check_id = db.Column(db.Integer, db.ForeignKey('inventory_check.id'), nullable=False, comment='盘点ID')
+    consumable_id = db.Column(db.Integer, db.ForeignKey('consumable.id'), nullable=False, comment='耗材ID')
+    system_quantity = db.Column(db.Integer, default=0, comment='系统库存数量')
+    actual_quantity = db.Column(db.Integer, default=None, comment='实盘数量')
+    difference = db.Column(db.Integer, default=0, comment='盈亏数量')
+    remark = db.Column(db.Text, nullable=True, comment='备注')
+
+    consumable = db.relationship('Consumable')
+
+    def to_dict(self):
+        data = {
+            'id': self.id,
+            'check_id': self.check_id,
+            'consumable_id': self.consumable_id,
+            'system_quantity': self.system_quantity,
+            'actual_quantity': self.actual_quantity,
+            'difference': self.difference,
+            'remark': self.remark,
+        }
+        if self.consumable:
+            data['consumable_code'] = self.consumable.code
+            data['consumable_name'] = self.consumable.name
+            data['consumable_spec'] = self.consumable.specification
+            data['consumable_unit'] = self.consumable.unit
+            data['category'] = self.consumable.category
         return data

@@ -7,6 +7,8 @@
   <!-- Element Plus CSS -->
   <link rel="stylesheet" href="https://unpkg.com/element-plus@2.7.3/dist/index.css">
   <link rel="stylesheet" href="/static/css/style.css">
+  <!-- ECharts -->
+  <script src="https://unpkg.com/echarts@5.5.0/dist/echarts.min.js"></script>
 </head>
 <body>
   <div id="app">
@@ -38,9 +40,21 @@
             <el-icon><svg viewBox="0 0 1024 1024" width="16" height="16"><path d="M890 120H134a70 70 0 0 0-70 70v544a70 70 0 0 0 70 70h756a70 70 0 0 0 70-70V190a70 70 0 0 0-70-70zm-10 590H144V200h736v510z" fill="currentColor"/><path d="M282.7 362.4h162v56h-162zM282.7 476.4h458v56h-458zM282.7 596.4h458v56h-458z" fill="currentColor"/></svg></el-icon>
             <span>库存查询</span>
           </el-menu-item>
+          <el-menu-item index="category">
+            <el-icon><svg viewBox="0 0 1024 1024" width="16" height="16"><path d="M912 192H328c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h584c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 284H328c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h584c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM214 192h-56c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h56c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 284h-56c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h56c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8z" fill="currentColor"/></svg></el-icon>
+            <span>类别管理</span>
+          </el-menu-item>
           <el-menu-item index="department">
             <el-icon><svg viewBox="0 0 1024 1024" width="16" height="16"><path d="M448 112v112H224v576h576V224H576V112h224c35.3 0 64 28.7 64 64v672c0 35.3-28.7 64-64 64H224c-35.3 0-64-28.7-64-64V176c0-35.3 28.7-64 64-64h224zm0 336V336h128v112h112v128H576v112H448V576H336V448h112z" fill="currentColor"/></svg></el-icon>
             <span>科室管理</span>
+          </el-menu-item>
+          <el-menu-item index="staff">
+            <el-icon><svg viewBox="0 0 1024 1024" width="16" height="16"><path d="M412 460h132c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8H412c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8zm316-156H296c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h432c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM136 84c-4.4 0-8 3.6-8 8v840c0 4.4 3.6 8 8 8h56c4.4 0 8-3.6 8-8V92c0-4.4-3.6-8-8-8h-56z" fill="currentColor"/></svg></el-icon>
+            <span>人员管理</span>
+          </el-menu-item>
+          <el-menu-item index="inventory-check">
+            <el-icon><svg viewBox="0 0 1024 1024" width="16" height="16"><path d="M928 160H96c-17.7 0-32 14.3-32 32v608c0 17.7 14.3 32 32 32h832c17.7 0 32-14.3 32-32V192c0-17.7-14.3-32-32-32zM338 652H206v-56h132v56zm0-144H206v-56h132v56zm0-144H206v-56h132v56zm400 288H412v-56h326v56zm0-144H412v-56h326v56zm0-144H412v-56h326v56z" fill="currentColor"/></svg></el-icon>
+            <span>库存盘点</span>
           </el-menu-item>
           <el-menu-item index="excel">
             <el-icon><svg viewBox="0 0 1024 1024" width="16" height="16"><path d="M854.6 288.6L639.4 73.4c-6-6-14.1-9.4-22.6-9.4H192c-17.7 0-32 14.3-32 32v832c0 17.7 14.3 32 32 32h640c17.7 0 32-14.3 32-32V311.3c0-8.5-3.4-16.6-9.4-22.7zM592 152l188.2 188.2H592V152zm176 720H256V152h280v236c0 4.4 3.6 8 8 8h424v476z" fill="currentColor"/></svg></el-icon>
@@ -52,7 +66,9 @@
       <!-- 主内容区 -->
       <el-main style="padding:0;background:#f0f2f5">
         <div class="main-container">
-          <router-view />
+          <el-config-provider :locale="locale">
+            <router-view />
+          </el-config-provider>
         </div>
       </el-main>
     </el-container>
