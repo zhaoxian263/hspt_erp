@@ -700,7 +700,7 @@ const OutboundPage = {
             </el-table-column>
             <el-table-column label="操作" width="60" align="center">
               <template #default="{$index}">
-                <el-button link type="danger" size="small" @click="removeOutboundItem($index)">删</el-button>
+                <el-button link type="danger" size="small" @click="removeOutboundItem($index)">删除</el-button>
               </template>
             </el-table-column>
           </el-table>

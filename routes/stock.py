@@ -147,8 +147,6 @@ def delete_inbound(record_id):
     ).first()
     if batch:
         batch.quantity -= record.quantity
-        if batch.quantity <= 0:
-            db.session.delete(batch)
     db.session.delete(record)
     db.session.commit()
     return jsonify({'message': '删除成功'})
@@ -296,10 +294,6 @@ def create_outbound():
                     remaining = 0
                 deducted_batches.append((batch.batch_number, deduct))
 
-            # 删除库存为0的批次
-            for batch in StockBatch.query.filter(StockBatch.quantity <= 0).all():
-                db.session.delete(batch)
-
             # 更新批号记录：逗号分隔所有参与扣减的批号（未指定批号时）
             if not batch_number and deducted_batches:
                 record.batch_number = ','.join(
@@ -378,9 +372,6 @@ def create_outbound():
                 remaining = 0
             deducted_batches.append((batch.batch_number, deduct))
 
-        for batch in StockBatch.query.filter(StockBatch.quantity <= 0).all():
-            db.session.delete(batch)
-
         if not batch_number and deducted_batches:
             record.batch_number = ','.join(
                 bn for bn, _ in deducted_batches if bn
@@ -421,10 +412,18 @@ def delete_outbound(record_id):
             if batch:
                 batch.quantity += restore_qty
             else:
+                # 批次可能已被出库扣为0后删除，从入库记录找回日期信息
+                inbound = InboundRecord.query.filter_by(
+                    consumable_id=record.consumable_id,
+                    batch_number=bn,
+                ).order_by(InboundRecord.id.desc()).first()
                 batch = StockBatch(
                     consumable_id=record.consumable_id,
                     batch_number=bn,
                     quantity=restore_qty,
+                    production_date=inbound.production_date if inbound else None,
+                    expiry_date=inbound.expiry_date if inbound else None,
+                    storage_location=inbound.storage_location if inbound else None,
                 )
                 db.session.add(batch)
     else:
@@ -442,10 +441,17 @@ def delete_outbound(record_id):
                 if batch:
                     batch.quantity += restore_qty
                 else:
+                    inbound = InboundRecord.query.filter_by(
+                        consumable_id=record.consumable_id,
+                        batch_number=bn,
+                    ).order_by(InboundRecord.id.desc()).first()
                     batch = StockBatch(
                         consumable_id=record.consumable_id,
                         batch_number=bn,
                         quantity=restore_qty,
+                        production_date=inbound.production_date if inbound else None,
+                        expiry_date=inbound.expiry_date if inbound else None,
+                        storage_location=inbound.storage_location if inbound else None,
                     )
                     db.session.add(batch)
 
