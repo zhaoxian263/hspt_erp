@@ -39,6 +39,7 @@ const API = {
   batches: '/api/stock/batches',
   dashboard: '/api/stock/dashboard',
   periodInventory: '/api/stock/period-inventory',
+  expiryQuery: '/api/stock/expiry-query',
   // Excel
   tplConsumable: '/api/excel/template/consumable',
   tplInbound: '/api/excel/template/inbound',
@@ -93,8 +94,8 @@ function printDocument(title, htmlContent) {
     <style>
       body { font-family: 'Microsoft YaHei', sans-serif; padding: 30px; color: #333; }
       h2 { text-align: center; margin-bottom: 20px; }
-      .print-info { margin: 8px 0; font-size: 14px; }
-      .print-info span { display: inline-block; width: 200px; }
+      .print-info { margin: 8px 0; font-size: 14px; display: flex; flex-wrap: wrap; }
+      .print-info span { display: inline-block; min-width: 280px; margin-right: 20px; }
       table { width: 100%; border-collapse: collapse; margin: 16px 0; }
       th, td { border: 1px solid #333; padding: 8px 10px; text-align: center; font-size: 13px; }
       th { background: #f0f0f0; }
@@ -247,7 +248,7 @@ const ConsumablePage = {
     onPageChange(p) { this.page = p; this.loadData(); },
     openAdd() {
       this.isEdit = false; this.dialogTitle = '新增耗材';
-      this.form = { code:'', name:'', brand:'', manufacturer:'', specification:'', unit:'', category:'', storage_location:'', initial_stock:0, stock_warning_value:0, expiry_warning_days:0, remark:'' };
+      this.form = { code:'', name:'', brand:'', manufacturer:'', specification:'', unit:'', category:'', storage_location:'', initial_stock:0, initial_production_date:'', initial_expiry_date:'', stock_warning_value:0, expiry_warning_days:0, remark:'' };
       this.categoryOptions = categoryOptions;
       this.dialogVisible = true;
     },
@@ -311,7 +312,8 @@ const ConsumablePage = {
             <el-tag v-if="row.expiry_status" :type="expiryTagType(row.expiry_status)" size="small">{{ row.expiry_status }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column prop="stock_warning_value" label="预警值" width="60" />
+        <el-table-column prop="stock_warning_value" label="库存预警值" width="90" />
+        <el-table-column prop="expiry_warning_days" label="效期预警值" width="90" />
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{row}">
             <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
@@ -321,34 +323,41 @@ const ConsumablePage = {
       </el-table>
       <el-pagination style="margin-top:16px;justify-content:flex-end" background layout="total, prev, pager, next"
         :total="total" :page-size="pageSize" v-model:current-page="page" @current-change="onPageChange" />
-      <el-dialog v-model="dialogVisible" :title="dialogTitle" width="650px" destroy-on-close>
-        <el-form :model="form" label-width="110px" size="default">
-          <el-row :gutter="12">
-            <el-col :span="12"><el-form-item label="耗材编号" required><el-input v-model="form.code" :disabled="isEdit" /></el-form-item></el-col>
-            <el-col :span="12"><el-form-item label="耗材名称" required><el-input v-model="form.name" /></el-form-item></el-col>
+      <el-dialog v-model="dialogVisible" :title="dialogTitle" width="720px" destroy-on-close>
+        <el-form :model="form" label-width="100px" size="default">
+          <el-divider content-position="left">基本信息</el-divider>
+          <el-row :gutter="16">
+            <el-col :span="12"><el-form-item label="耗材编号" required><el-input v-model="form.code" :disabled="isEdit" placeholder="如 HC001" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="耗材名称" required><el-input v-model="form.name" placeholder="如 一次性注射器" /></el-form-item></el-col>
           </el-row>
-          <el-row :gutter="12">
+          <el-row :gutter="16">
             <el-col :span="12"><el-form-item label="类别">
               <el-select v-model="form.category" filterable allow-create placeholder="选择或输入类别" style="width:100%">
                 <el-option v-for="c in categoryOptions" :key="c.id" :label="c.name" :value="c.name" />
               </el-select>
             </el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="单位"><el-input v-model="form.unit" placeholder="如 支、包、盒" /></el-form-item></el-col>
+          </el-row>
+          <el-row :gutter="16">
             <el-col :span="12"><el-form-item label="品牌名称"><el-input v-model="form.brand" /></el-form-item></el-col>
-          </el-row>
-          <el-row :gutter="12">
             <el-col :span="12"><el-form-item label="生产厂家"><el-input v-model="form.manufacturer" /></el-form-item></el-col>
+          </el-row>
+          <el-row :gutter="16">
             <el-col :span="12"><el-form-item label="规格型号"><el-input v-model="form.specification" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="存放位置"><el-input v-model="form.storage_location" placeholder="如 1号库房-A区" /></el-form-item></el-col>
           </el-row>
-          <el-row :gutter="12">
-            <el-col :span="8"><el-form-item label="单位"><el-input v-model="form.unit" /></el-form-item></el-col>
-            <el-col :span="8"><el-form-item label="存放位置"><el-input v-model="form.storage_location" /></el-form-item></el-col>
-            <el-col :span="8"><el-form-item label="期初库存"><el-input-number v-model="form.initial_stock" :min="0" :step="1" style="width:100%;min-width:100px" /></el-form-item></el-col>
+          <el-divider content-position="left">库存设置</el-divider>
+          <el-row :gutter="16">
+            <el-col :span="8"><el-form-item label="期初库存"><el-input-number v-model="form.initial_stock" :min="0" :step="1" style="width:100%" /></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="库存预警值"><el-input-number v-model="form.stock_warning_value" :min="0" style="width:100%" /></el-form-item></el-col>
+            <el-col :span="8"><el-form-item label="效期预警天数"><el-input-number v-model="form.expiry_warning_days" :min="0" style="width:100%" /></el-form-item></el-col>
           </el-row>
-          <el-row :gutter="12">
-            <el-col :span="12"><el-form-item label="库存预警值"><el-input-number v-model="form.stock_warning_value" :min="0" /></el-form-item></el-col>
-            <el-col :span="12"><el-form-item label="效期预警天数"><el-input-number v-model="form.expiry_warning_days" :min="0" /></el-form-item></el-col>
+          <el-row :gutter="16" v-if="form.initial_stock > 0">
+            <el-col :span="12"><el-form-item label="生产日期"><el-date-picker v-model="form.initial_production_date" type="date" value-format="YYYY-MM-DD" placeholder="期初库存生产日期" style="width:100%" /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="失效日期"><el-date-picker v-model="form.initial_expiry_date" type="date" value-format="YYYY-MM-DD" placeholder="期初库存失效日期" style="width:100%" /></el-form-item></el-col>
           </el-row>
-          <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" /></el-form-item>
+          <el-divider content-position="left">其他</el-divider>
+          <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" placeholder="选填" /></el-form-item>
         </el-form>
         <template #footer>
           <el-button @click="dialogVisible=false">取消</el-button>
@@ -408,6 +417,7 @@ const InboundPage = {
           <h2>入库单</h2>
           <div class="print-info"><span>入库单号：${data.document_number || '-'}</span><span>入库时间：${data.inbound_time || '-'}</span></div>
           <div class="print-info"><span>经办人：${data.operator || '-'}</span><span>存放位置：${data.storage_location || '-'}</span></div>
+          <div style="clear:both"></div>
           <table>
             <tr><th>耗材编号</th><th>耗材名称</th><th>规格型号</th><th>品牌</th><th>单位</th><th>批号</th><th>生产日期</th><th>失效日期</th><th>数量</th><th>备注</th></tr>
             <tr>
@@ -496,7 +506,7 @@ const OutboundPage = {
     return {
       items: [], total: 0, page: 1, pageSize: 20, keyword: '',
       startDate: '', endDate: '',
-      dialogVisible: false, form: {}, outboundItems: [], consumableList: [], deptList: [],
+      dialogVisible: false, form: {}, outboundItems: [], consumableList: [], deptList: [], batchMap: {},
     };
   },
   async mounted() { this.loadData(); this.loadConsumables(); this.loadDepts(); },
@@ -520,6 +530,7 @@ const OutboundPage = {
       const now = new Date().toISOString().slice(0, 16);
       this.form = { recipient: '', department: '', operator: '', outbound_time: now, remark: '' };
       this.outboundItems = [{ consumable_id: null, quantity: 1, batch_number: '' }];
+      this.batchMap = {};
       this.dialogVisible = true;
     },
     addOutboundItem() {
@@ -529,6 +540,19 @@ const OutboundPage = {
       if (this.outboundItems.length > 1) {
         this.outboundItems.splice(index, 1);
       }
+    },
+    async onConsumableChange(row) {
+      row.batch_number = '';
+      const cid = row.consumable_id;
+      if (!cid) return;
+      if (!this.batchMap[cid]) {
+        const res = await fetch(`${API.batches}?consumable_id=${cid}`);
+        const data = await res.json();
+        this.batchMap[cid] = data.items || [];
+      }
+    },
+    getBatchOptions(consumableId) {
+      return consumableId ? (this.batchMap[consumableId] || []) : [];
     },
     async saveForm() {
       // 验证：至少有一个明细，且每个明细都有耗材和数量
@@ -561,6 +585,26 @@ const OutboundPage = {
       if (res.ok) { ElMessage.success('删除成功'); this.loadData(); }
       else { const err = await res.json(); ElMessage.error(err.error); }
     },
+    formatBatchNumbers(bn, detail) {
+      if (!bn) return '';
+      // 优先使用 batch_detail 展示每个批号及扣减数量
+      if (detail && Array.isArray(detail) && detail.length > 0) {
+        return detail.map(d => `<div style="line-height:1.6">${d.batch_number}(${d.quantity})</div>`).join('');
+      }
+      // 兼容旧数据：仅逗号分隔批号
+      const parts = bn.split(',').filter(s => s.trim());
+      if (parts.length <= 1) return bn;
+      return parts.map(b => `<div style="line-height:1.6">${b}</div>`).join('');
+    },
+    formatBatchNumberForPrint(item) {
+      // 打印模板中批号展示（纯文本，用<br/>换行）
+      const detail = item.batch_detail;
+      const bn = item.batch_number || '';
+      if (detail && Array.isArray(detail) && detail.length > 0) {
+        return detail.map(d => `${d.batch_number}(${d.quantity})`).join('<br/>');
+      }
+      return bn.replace(/,/g, '<br/>');
+    },
     gotoExcel() { this.$router.push('/excel'); },
     async printRecord(row) {
       // 打印时需要获取同一单号下的所有明细
@@ -572,7 +616,7 @@ const OutboundPage = {
           <tr>
             <td>${item.consumable_code || ''}</td><td>${item.consumable_name || ''}</td>
             <td>${item.consumable_spec || ''}</td><td>${item.consumable_brand || ''}</td>
-            <td>${item.consumable_unit || ''}</td><td>${item.batch_number || ''}</td>
+            <td>${item.consumable_unit || ''}</td><td>${this.formatBatchNumberForPrint(item)}</td>
             <td>${item.quantity}</td><td>${item.remark || ''}</td>
           </tr>`).join('');
         const html = `
@@ -580,6 +624,7 @@ const OutboundPage = {
           <div class="print-info"><span>出库单号：${row.document_number || '-'}</span><span>出库时间：${row.outbound_time || '-'}</span></div>
           <div class="print-info"><span>领用科室：${row.department || '-'}</span><span>领用人：${row.recipient || '-'}</span></div>
           <div class="print-info"><span>经办人：${row.operator || '-'}</span></div>
+          <div style="clear:both"></div>
           <table>
             <tr><th>耗材编号</th><th>耗材名称</th><th>规格型号</th><th>品牌</th><th>单位</th><th>批号</th><th>数量</th><th>备注</th></tr>
             ${rows}
@@ -609,7 +654,11 @@ const OutboundPage = {
         <el-table-column prop="consumable_code" label="耗材编号" width="120" />
         <el-table-column prop="consumable_name" label="耗材名称" min-width="130" />
         <el-table-column prop="consumable_spec" label="规格型号" width="110" />
-        <el-table-column prop="batch_number" label="批号" width="110" />
+        <el-table-column label="批号" width="150">
+          <template #default="{row}">
+            <span v-html="formatBatchNumbers(row.batch_number, row.batch_detail)"></span>
+          </template>
+        </el-table-column>
         <el-table-column prop="quantity" label="出库数量" width="75" />
         <el-table-column prop="recipient" label="领用人" width="70" />
         <el-table-column prop="department" label="领用科室" width="90" />
@@ -630,14 +679,17 @@ const OutboundPage = {
           <el-table :data="outboundItems" border size="small" style="margin-bottom:12px">
             <el-table-column label="耗材" min-width="180">
               <template #default="{row,$index}">
-                <el-select v-model="row.consumable_id" filterable placeholder="选择耗材" style="width:100%">
+                <el-select v-model="row.consumable_id" filterable placeholder="选择耗材" style="width:100%" @change="onConsumableChange(row)">
                   <el-option v-for="c in consumableList" :key="c.id" :label="c.code + ' ' + c.name + (c.specification?' ('+c.specification+')':'')" :value="c.id" />
                 </el-select>
               </template>
             </el-table-column>
-            <el-table-column label="批号(可选)" width="120">
+            <el-table-column label="批号(可选)" width="180">
               <template #default="{row}">
-                <el-input v-model="row.batch_number" placeholder="自动" size="small" />
+                <el-select v-model="row.batch_number" placeholder="自动(FIFO)" size="small" clearable style="width:100%">
+                  <el-option label="自动(FIFO)" value="" />
+                  <el-option v-for="b in getBatchOptions(row.consumable_id)" :key="b.batch_number" :label="b.batch_number + ' (库存:' + b.quantity + ')'" :value="b.batch_number" />
+                </el-select>
               </template>
             </el-table-column>
             <el-table-column label="数量" width="100">
@@ -1077,6 +1129,72 @@ const InventoryPage = {
   `
 };
 
+// ======================== 效期查询 ========================
+const ExpiryQueryPage = {
+  data() {
+    return {
+      items: [], total: 0, page: 1, pageSize: 50,
+      keyword: '', statusFilter: '', categoryFilter: '',
+      categoryOptions: [],
+    };
+  },
+  async created() {
+    await _categoryLoaded;
+    this.categoryOptions = categoryOptions;
+  },
+  mounted() { this.loadData(); },
+  methods: {
+    async loadData() {
+      const params = new URLSearchParams({ page: this.page, page_size: this.pageSize });
+      if (this.keyword) params.set('keyword', this.keyword);
+      if (this.statusFilter) params.set('status', this.statusFilter);
+      if (this.categoryFilter) params.set('category', this.categoryFilter);
+      const res = await fetch(`${API.expiryQuery}?${params}`);
+      const data = await res.json(); this.items = data.items; this.total = data.total;
+    },
+    onSearch() { this.page = 1; this.loadData(); },
+    onPageChange(p) { this.page = p; this.loadData(); },
+    expiryTagType(s) { return s==='已过期'?'danger': s==='近效期'?'warning':'success'; },
+  },
+  template: `
+    <div>
+      <h3 class="page-title">效期查询</h3>
+      <div class="search-bar">
+        <el-row :gutter="12">
+          <el-col :span="4"><el-input v-model="keyword" placeholder="编号/名称搜索" clearable @keyup.enter="onSearch" /></el-col>
+          <el-col :span="4">
+            <el-select v-model="statusFilter" placeholder="效期状态" clearable @change="onSearch" style="width:100%">
+              <el-option label="近效期" value="near_expiry" />
+              <el-option label="已过期" value="expired" />
+            </el-select>
+          </el-col>
+          <el-col :span="3">
+            <el-select v-model="categoryFilter" placeholder="类别筛选" clearable @change="onSearch" style="width:100%">
+              <el-option v-for="c in categoryOptions" :key="c.id" :label="c.name" :value="c.name" />
+            </el-select>
+          </el-col>
+          <el-col :span="3"><el-button type="primary" @click="onSearch">搜索</el-button></el-col>
+        </el-row>
+      </div>
+      <el-table :data="items" border stripe size="small">
+        <el-table-column prop="code" label="编号" width="120" fixed />
+        <el-table-column prop="name" label="名称" min-width="130" />
+        <el-table-column prop="category" label="类别" width="80" />
+        <el-table-column prop="batch_number" label="批次" width="140" />
+        <el-table-column prop="storage_location" label="存放位置" width="100" />
+        <el-table-column prop="production_date" label="生产日期" width="100" />
+        <el-table-column prop="expiry_date" label="失效日期" width="100" />
+        <el-table-column label="效期状态" width="80">
+          <template #default="{row}"><el-tag :type="expiryTagType(row.expiry_status)" size="small">{{ row.expiry_status }}</el-tag></template>
+        </el-table-column>
+        <el-table-column prop="quantity" label="当前库存" width="80" />
+      </el-table>
+      <el-pagination style="margin-top:16px;justify-content:flex-end" background layout="total, prev, pager, next"
+        :total="total" :page-size="pageSize" v-model:current-page="page" @current-change="onPageChange" />
+    </div>
+  `
+};
+
 // ======================== 库存盘点 ========================
 const InventoryCheckPage = {
   data() {
@@ -1396,6 +1514,7 @@ const router = VueRouter.createRouter({
     { path: '/inbound', component: InboundPage, name: 'inbound' },
     { path: '/outbound', component: OutboundPage, name: 'outbound' },
     { path: '/inventory', component: InventoryPage, name: 'inventory' },
+    { path: '/expiry-query', component: ExpiryQueryPage, name: 'expiry-query' },
     { path: '/inventory-check', component: InventoryCheckPage, name: 'inventory-check' },
     { path: '/category', component: CategoryPage, name: 'category' },
     { path: '/staff', component: StaffPage, name: 'staff' },

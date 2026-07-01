@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, date
 from flask import Blueprint, request, jsonify
 from models import db, Consumable, StockBatch, InboundRecord, OutboundRecord, InventoryCheck
@@ -85,7 +86,7 @@ def create_inbound():
 
     consumable_id = data['consumable_id']
     quantity = int(data['quantity'])
-    batch_number = data.get('batch_number', '')
+    batch_number = data.get('batch_number', '').strip()
 
     # 验证耗材存在
     consumable = Consumable.query.get(consumable_id)
@@ -99,6 +100,10 @@ def create_inbound():
 
     # 自动生成入库单号
     document_number = _generate_document_number('RK')
+
+    # 批号为空时自动生成：耗材编码+日期+3位序号
+    if not batch_number:
+        batch_number = _generate_batch_number(consumable.code)
 
     # 创建入库记录
     record = InboundRecord(
@@ -275,26 +280,36 @@ def create_outbound():
             )
             db.session.add(record)
 
-            # 扣减批次库存
+            # 扣减批次库存（FIFO），记录每个批号的实际扣减量
             remaining = quantity
+            deducted_batches = []  # [(batch_number, deduct_qty), ...]
             for batch in batches:
                 if remaining <= 0:
                     break
                 if batch.quantity <= remaining:
-                    remaining -= batch.quantity
+                    deduct = batch.quantity
                     batch.quantity = 0
+                    remaining -= deduct
                 else:
+                    deduct = remaining
                     batch.quantity -= remaining
                     remaining = 0
+                deducted_batches.append((batch.batch_number, deduct))
 
             # 删除库存为0的批次
             for batch in StockBatch.query.filter(StockBatch.quantity <= 0).all():
                 db.session.delete(batch)
 
-            # 更新批号记录
-            if not batch_number and batches:
-                used_batches = [b.batch_number or '' for b in batches if b.quantity >= 0]
-                record.batch_number = ', '.join(filter(None, used_batches))[:100]
+            # 更新批号记录：逗号分隔所有参与扣减的批号（未指定批号时）
+            if not batch_number and deducted_batches:
+                record.batch_number = ','.join(
+                    bn for bn, _ in deducted_batches if bn
+                )
+                # 记录每个批号的扣减明细
+                record.batch_detail = json.dumps([
+                    {'batch_number': bn, 'quantity': qty}
+                    for bn, qty in deducted_batches if bn
+                ], ensure_ascii=False)
 
             created_records.append(record)
 
@@ -349,22 +364,32 @@ def create_outbound():
         db.session.add(record)
 
         remaining = quantity
+        deducted_batches = []  # [(batch_number, deduct_qty), ...]
         for batch in batches:
             if remaining <= 0:
                 break
             if batch.quantity <= remaining:
-                remaining -= batch.quantity
+                deduct = batch.quantity
                 batch.quantity = 0
+                remaining -= deduct
             else:
+                deduct = remaining
                 batch.quantity -= remaining
                 remaining = 0
+            deducted_batches.append((batch.batch_number, deduct))
 
         for batch in StockBatch.query.filter(StockBatch.quantity <= 0).all():
             db.session.delete(batch)
 
-        if not batch_number and batches:
-            used_batches = [b.batch_number or '' for b in batches if b.quantity >= 0]
-            record.batch_number = ', '.join(filter(None, used_batches))[:100]
+        if not batch_number and deducted_batches:
+            record.batch_number = ','.join(
+                bn for bn, _ in deducted_batches if bn
+            )
+            # 记录每个批号的扣减明细
+            record.batch_detail = json.dumps([
+                {'batch_number': bn, 'quantity': qty}
+                for bn, qty in deducted_batches if bn
+            ], ensure_ascii=False)
 
         db.session.commit()
         return jsonify(record.to_dict(include_consumable=True)), 201
@@ -374,25 +399,55 @@ def create_outbound():
 def delete_outbound(record_id):
     """删除出库记录（同时恢复库存批次）"""
     record = OutboundRecord.query.get_or_404(record_id)
-    # 恢复批次库存：查找同批号批次，有则加回，无则新建
-    for bn in (record.batch_number or '').split(','):
-        bn = bn.strip()
-        if not bn:
-            continue
-        batch = StockBatch.query.filter_by(
-            consumable_id=record.consumable_id,
-            batch_number=bn,
-        ).first()
-        if batch:
-            batch.quantity += record.quantity
-        else:
-            batch = StockBatch(
+    # 优先从 batch_detail 精确恢复各批次的数量
+    batch_detail = None
+    if record.batch_detail:
+        try:
+            batch_detail = json.loads(record.batch_detail)
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    if batch_detail:
+        # 精确恢复：每个批次恢复其被扣减的精确数量
+        for item in batch_detail:
+            bn = item.get('batch_number', '').strip()
+            restore_qty = item.get('quantity', 0)
+            if not bn or restore_qty <= 0:
+                continue
+            batch = StockBatch.query.filter_by(
                 consumable_id=record.consumable_id,
                 batch_number=bn,
-                quantity=record.quantity,
-            )
-            db.session.add(batch)
-        break  # 只处理第一个批号
+            ).first()
+            if batch:
+                batch.quantity += restore_qty
+            else:
+                batch = StockBatch(
+                    consumable_id=record.consumable_id,
+                    batch_number=bn,
+                    quantity=restore_qty,
+                )
+                db.session.add(batch)
+    else:
+        # 兼容旧数据：从 batch_number 逗号分隔恢复，均分数量
+        batch_numbers = [bn.strip() for bn in (record.batch_number or '').split(',') if bn.strip()]
+        if batch_numbers:
+            per_batch = record.quantity // len(batch_numbers)
+            remainder = record.quantity % len(batch_numbers)
+            for idx, bn in enumerate(batch_numbers):
+                restore_qty = per_batch + (1 if idx < remainder else 0)
+                batch = StockBatch.query.filter_by(
+                    consumable_id=record.consumable_id,
+                    batch_number=bn,
+                ).first()
+                if batch:
+                    batch.quantity += restore_qty
+                else:
+                    batch = StockBatch(
+                        consumable_id=record.consumable_id,
+                        batch_number=bn,
+                        quantity=restore_qty,
+                    )
+                    db.session.add(batch)
 
     db.session.delete(record)
     db.session.commit()
@@ -410,6 +465,65 @@ def print_outbound(record_id):
         data['consumable_spec'] = record.consumable.specification
         data['consumable_unit'] = record.consumable.unit
     return jsonify(data)
+
+
+# ======================== 效期查询 ========================
+
+@stock_bp.route('/expiry-query', methods=['GET'])
+def expiry_query():
+    """效期查询：按批次维度展示各耗材的效期信息"""
+    page = request.args.get('page', 1, type=int)
+    page_size = request.args.get('page_size', 50, type=int)
+    keyword = request.args.get('keyword', '').strip()
+    status = request.args.get('status', '').strip()
+    category = request.args.get('category', '').strip()
+
+    # 查询所有有库存的批次，关联耗材信息
+    query = StockBatch.query.filter(StockBatch.quantity > 0)
+
+    # 关联耗材进行筛选
+    if keyword:
+        query = query.join(Consumable, StockBatch.consumable_id == Consumable.id).filter(
+            db.or_(Consumable.code.contains(keyword), Consumable.name.contains(keyword))
+        )
+    else:
+        query = query.join(Consumable, StockBatch.consumable_id == Consumable.id)
+
+    if category:
+        query = query.filter(Consumable.category == category)
+
+    # 按失效日期升序排列（即将过期的排前面）
+    query = query.order_by(StockBatch.expiry_date.asc().nullslast())
+
+    pagination = query.paginate(page=page, per_page=page_size, error_out=False)
+
+    items = []
+    for batch in pagination.items:
+        consumable = batch.consumable
+        batch_status = batch.expiry_status
+        # 效期状态过滤
+        if status == 'near_expiry' and batch_status != '近效期':
+            continue
+        if status == 'expired' and batch_status != '已过期':
+            continue
+        items.append({
+            'code': consumable.code if consumable else '',
+            'name': consumable.name if consumable else '',
+            'category': consumable.category if consumable else '',
+            'batch_number': batch.batch_number or '-',
+            'storage_location': batch.storage_location or '-',
+            'production_date': batch.production_date.strftime('%Y-%m-%d') if batch.production_date else '-',
+            'expiry_date': batch.expiry_date.strftime('%Y-%m-%d') if batch.expiry_date else '-',
+            'expiry_status': batch_status,
+            'quantity': batch.quantity,
+        })
+
+    return jsonify({
+        'items': items,
+        'total': pagination.total,
+        'page': page,
+        'page_size': page_size,
+    })
 
 
 # ======================== 库存查询与预警 ========================
@@ -628,6 +742,35 @@ def dashboard():
 
 
 # ======================== 工具函数 ========================
+
+def _generate_batch_number(consumable_code):
+    """生成批号：耗材编码+日期+3位序号，如 HC00120260701001"""
+    today_str = datetime.now().strftime('%Y%m%d')
+    prefix = f'{consumable_code}{today_str}'
+    prefix_len = len(prefix)
+    max_seq = 0
+    # 同时从 StockBatch 和 InboundRecord 中查找当天该耗材的最大序号
+    # 避免批次被出库扣完删除后序号重置导致批号重复
+    for batch_bn in StockBatch.query.filter(
+        StockBatch.batch_number.like(f'{prefix}%')
+    ).with_entities(StockBatch.batch_number).all():
+        try:
+            seq = int(batch_bn[0][prefix_len:])
+            if seq > max_seq:
+                max_seq = seq
+        except (ValueError, IndexError):
+            pass
+    for rec_bn in InboundRecord.query.filter(
+        InboundRecord.batch_number.like(f'{prefix}%')
+    ).with_entities(InboundRecord.batch_number).all():
+        try:
+            seq = int(rec_bn[0][prefix_len:])
+            if seq > max_seq:
+                max_seq = seq
+        except (ValueError, IndexError):
+            pass
+    return f'{prefix}{max_seq + 1:03d}'
+
 
 def _parse_date(value):
     """解析日期字符串"""

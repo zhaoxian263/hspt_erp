@@ -36,10 +36,18 @@
             <el-icon><svg viewBox="0 0 1024 1024" width="16" height="16"><path d="M928 160H96c-17.7 0-32 14.3-32 32v160c0 17.7 14.3 32 32 32h32v448c0 35.3 28.7 64 64 64h640c35.3 0 64-28.7 64-64V384h32c17.7 0 32-14.3 32-32V192c0-17.7-14.3-32-32-32zM768 832H256V384h512v448z" fill="currentColor"/></svg></el-icon>
             <span>出库管理</span>
           </el-menu-item>
-          <el-menu-item index="inventory">
-            <el-icon><svg viewBox="0 0 1024 1024" width="16" height="16"><path d="M890 120H134a70 70 0 0 0-70 70v544a70 70 0 0 0 70 70h756a70 70 0 0 0 70-70V190a70 70 0 0 0-70-70zm-10 590H144V200h736v510z" fill="currentColor"/><path d="M282.7 362.4h162v56h-162zM282.7 476.4h458v56h-458zM282.7 596.4h458v56h-458z" fill="currentColor"/></svg></el-icon>
-            <span>库存查询</span>
-          </el-menu-item>
+          <el-sub-menu index="inventory-mgmt">
+            <template #title>
+              <el-icon><svg viewBox="0 0 1024 1024" width="16" height="16"><path d="M890 120H134a70 70 0 0 0-70 70v544a70 70 0 0 0 70 70h756a70 70 0 0 0 70-70V190a70 70 0 0 0-70-70zm-10 590H144V200h736v510z" fill="currentColor"/><path d="M282.7 362.4h162v56h-162zM282.7 476.4h458v56h-458zM282.7 596.4h458v56h-458z" fill="currentColor"/></svg></el-icon>
+              <span>库存管理</span>
+            </template>
+            <el-menu-item index="inventory">
+              <span>库存查询</span>
+            </el-menu-item>
+            <el-menu-item index="expiry-query">
+              <span>效期查询</span>
+            </el-menu-item>
+          </el-sub-menu>
           <el-menu-item index="category">
             <el-icon><svg viewBox="0 0 1024 1024" width="16" height="16"><path d="M912 192H328c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h584c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 284H328c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h584c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zM214 192h-56c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h56c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8zm0 284h-56c-4.4 0-8 3.6-8 8v56c0 4.4 3.6 8 8 8h56c4.4 0 8-3.6 8-8v-56c0-4.4-3.6-8-8-8z" fill="currentColor"/></svg></el-icon>
             <span>类别管理</span>

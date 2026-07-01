@@ -1,6 +1,8 @@
 import os
 import sys
 import sqlite3
+import shutil
+from datetime import datetime
 from flask import Flask, render_template, send_from_directory
 from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_TRACK_MODIFICATIONS, SECRET_KEY, MAX_CONTENT_LENGTH
 from models import db
@@ -38,6 +40,11 @@ def _migrate_db(db_path):
         return
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
+    # 安全检查：如果数据库没有表则跳过
+    cursor.execute("SELECT count(*) FROM sqlite_master WHERE type='table'")
+    if cursor.fetchone()[0] == 0:
+        conn.close()
+        return
     # 需要添加的新列: {表名: [(列名, 列类型), ...]}
     migrations = {
         'consumable': [
@@ -73,6 +80,86 @@ def _migrate_db(db_path):
                     pass
     conn.commit()
     conn.close()
+    # 去掉 document_number 的 unique 约束（SQLite 需重建表）
+    _drop_document_number_unique(db_path)
+
+
+def _drop_document_number_unique(db_path):
+    """去掉 inbound_record / outbound_record 的 document_number unique 约束
+    SQLite 不支持 DROP CONSTRAINT，需要重建表"""
+    if not os.path.exists(db_path):
+        return
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    # 安全检查：如果数据库没有表则跳过
+    cursor.execute("SELECT count(*) FROM sqlite_master WHERE type='table'")
+    if cursor.fetchone()[0] == 0:
+        conn.close()
+        return
+
+    for table in ('inbound_record', 'outbound_record'):
+        # 检查 document_number 列是否有 unique 约束
+        cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        row = cursor.fetchone()
+        if not row or 'UNIQUE' not in row[0].upper():
+            continue
+        # 获取列定义
+        cursor.execute(f"PRAGMA table_info({table})")
+        columns = cursor.fetchall()
+        col_defs = []
+        col_names = []
+        for col in columns:
+            col_names.append(col[1])
+            base = f'{col[1]} {col[2]}'
+            if col[3]:  # notnull
+                base += ' NOT NULL'
+            if col[4] is not None:  # default
+                base += f' DEFAULT {col[4]}'
+            # 跳过原表 SQL 中的 UNIQUE 约束（在列定义里）
+            col_defs.append(base)
+
+        # 获取外键信息
+        cursor.execute(f"PRAGMA foreign_key_list({table})")
+        fks = cursor.fetchall()
+        fk_defs = []
+        for fk in fks:
+            fk_defs.append(f'FOREIGN KEY({fk[3]}) REFERENCES {fk[2]}({fk[4]})')
+
+        cols_str = ', '.join(col_names)
+        all_defs = ', '.join(col_defs + fk_defs)
+
+        new_table = f'_tmp_{table}'
+        cursor.execute(f'CREATE TABLE {new_table} ({all_defs})')
+        cursor.execute(f'INSERT INTO {new_table} ({cols_str}) SELECT {cols_str} FROM {table}')
+        cursor.execute(f'DROP TABLE {table}')
+        cursor.execute(f'ALTER TABLE {new_table} RENAME TO {table}')
+        print(f'  ✅ {table}.document_number unique 约束已移除')
+
+    conn.commit()
+    conn.close()
+
+
+def _patch_initial_stock_batches():
+    """为已有耗材补充期初库存批次：initial_stock > 0 且无'期初库存'批次时补建"""
+    from models import Consumable, StockBatch
+    patched = 0
+    for c in Consumable.query.filter(Consumable.initial_stock > 0).all():
+        exists = StockBatch.query.filter_by(
+            consumable_id=c.id, batch_number='期初库存'
+        ).first()
+        if not exists:
+            batch = StockBatch(
+                consumable_id=c.id,
+                batch_number='期初库存',
+                quantity=c.initial_stock,
+                storage_location=c.storage_location,
+                remark='系统自动创建（期初库存）',
+            )
+            db.session.add(batch)
+            patched += 1
+    if patched:
+        db.session.commit()
+        print(f'  ✅ 已为 {patched} 条耗材补充期初库存批次')
 
 
 def init_db(app):
@@ -80,12 +167,15 @@ def init_db(app):
     with app.app_context():
         db_path = app.config['SQLALCHEMY_DATABASE_URI'].replace('sqlite:///', '')
         os.makedirs(os.path.dirname(db_path), exist_ok=True)
+
         # 确保所有模型已加载，db.create_all() 才能创建对应表
         from models import (db, Consumable, StockBatch, InboundRecord, OutboundRecord,
                             Department, Category, Staff, InventoryCheck, InventoryCheckItem)
         db.create_all()
         # 对已有数据库执行增量迁移
         _migrate_db(db_path)
+        # 为已有耗材补充期初库存批次（initial_stock > 0 但无对应批次时补建）
+        _patch_initial_stock_batches()
         # 首次运行时初始化默认科室
         if Department.query.count() == 0:
             defaults = ['门诊检验科', '住院部', '手术室', '急诊科', 'ICU', '儿科',
@@ -103,9 +193,26 @@ def init_db(app):
             print('✅ 已初始化默认类别')
         print('✅ 数据库初始化完成')
 
+        # 初始化完成后备份数据库（备份有效数据的数据库）
+        if os.path.exists(db_path) and os.path.getsize(db_path) > 0:
+            backup_dir = os.path.join(os.path.dirname(db_path), 'backups')
+            os.makedirs(backup_dir, exist_ok=True)
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            backup_path = os.path.join(backup_dir, f'erp_{timestamp}.db')
+            shutil.copy2(db_path, backup_path)
+            # 只保留最近5个备份
+            backups = sorted(
+                [f for f in os.listdir(backup_dir) if f.startswith('erp_') and f.endswith('.db')],
+                reverse=True
+            )
+            for old_backup in backups[5:]:
+                os.remove(os.path.join(backup_dir, old_backup))
+            print(f'✅ 数据库已备份 → {backup_path}')
+
 
 if __name__ == '__main__':
     app = create_app()
     init_db(app)
     print('🏥 安居镇中心卫生院护理部耗材管理系统已启动 → http://localhost:5000')
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    # use_reloader=False 防止双进程并发写 SQLite 导致数据库损坏
+    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)

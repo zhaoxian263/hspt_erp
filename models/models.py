@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, date
 from flask_sqlalchemy import SQLAlchemy
 
@@ -102,11 +103,15 @@ class Consumable(db.Model):
 
     @property
     def stock_status(self):
-        """库存状态: 正常/预警/不足"""
+        """库存状态: 正常/预警/不足
+        三级判定：不足(≤0或≤预警值且>0) / 预警(≤预警值×1.5且>预警值) / 正常(>预警值×1.5)
+        """
         total = self.total_stock
         if total <= 0:
             return '库存不足'
         elif self.stock_warning_value > 0 and total <= self.stock_warning_value:
+            return '库存不足'
+        elif self.stock_warning_value > 0 and total <= self.stock_warning_value * 1.5:
             return '库存预警'
         else:
             return '库存正常'
@@ -147,6 +152,16 @@ class Consumable(db.Model):
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,
         }
+        # 附带期初库存批次的生产日期和失效日期，用于编辑表单回显
+        init_batch = StockBatch.query.filter_by(
+            consumable_id=self.id, batch_number='期初库存'
+        ).first()
+        if init_batch:
+            data['initial_production_date'] = init_batch.production_date.strftime('%Y-%m-%d') if init_batch.production_date else None
+            data['initial_expiry_date'] = init_batch.expiry_date.strftime('%Y-%m-%d') if init_batch.expiry_date else None
+        else:
+            data['initial_production_date'] = None
+            data['initial_expiry_date'] = None
         if include_stock:
             data.update({
                 'total_inbound': self.total_inbound,
@@ -210,6 +225,20 @@ class StockBatch(db.Model):
             data['consumable_unit'] = self.consumable.unit
         return data
 
+    @property
+    def expiry_status(self):
+        """批次效期状态: 正常/近效期/已过期"""
+        if self.expiry_date is None:
+            return '效期正常'
+        today = date.today()
+        if self.expiry_date < today:
+            return '已过期'
+        if self.consumable and self.consumable.expiry_warning_days > 0:
+            days_left = (self.expiry_date - today).days
+            if days_left <= self.consumable.expiry_warning_days:
+                return '近效期'
+        return '效期正常'
+
 
 class InboundRecord(db.Model):
     """入库记录"""
@@ -217,7 +246,7 @@ class InboundRecord(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     consumable_id = db.Column(db.Integer, db.ForeignKey('consumable.id'), nullable=False, comment='耗材ID')
-    document_number = db.Column(db.String(50), unique=True, nullable=True, comment='入库单号')
+    document_number = db.Column(db.String(50), nullable=True, comment='入库单号')
     batch_number = db.Column(db.String(100), nullable=True, comment='批号')
     production_date = db.Column(db.Date, nullable=True, comment='生产日期')
     expiry_date = db.Column(db.Date, nullable=True, comment='失效日期')
@@ -255,8 +284,9 @@ class OutboundRecord(db.Model):
 
     id = db.Column(db.Integer, primary_key=True, autoincrement=True)
     consumable_id = db.Column(db.Integer, db.ForeignKey('consumable.id'), nullable=False, comment='耗材ID')
-    document_number = db.Column(db.String(50), unique=True, nullable=True, comment='出库单号')
+    document_number = db.Column(db.String(50), nullable=True, comment='出库单号')
     batch_number = db.Column(db.String(100), nullable=True, comment='批号')
+    batch_detail = db.Column(db.Text, nullable=True, comment='扣减明细JSON，如[{"batch_number":"HC00120260701001","quantity":2}]')
     quantity = db.Column(db.Integer, nullable=False, comment='出库数量')
     recipient = db.Column(db.String(100), nullable=True, comment='领用人')
     department = db.Column(db.String(200), nullable=True, comment='领用科室')
@@ -270,6 +300,7 @@ class OutboundRecord(db.Model):
             'consumable_id': self.consumable_id,
             'document_number': self.document_number,
             'batch_number': self.batch_number,
+            'batch_detail': json.loads(self.batch_detail) if self.batch_detail else None,
             'quantity': self.quantity,
             'recipient': self.recipient,
             'department': self.department,
