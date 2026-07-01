@@ -51,6 +51,7 @@ const API = {
   exportInventory: '/api/excel/export/inventory',
   exportInbound: '/api/excel/export/inbound',
   exportOutbound: '/api/excel/export/outbound',
+  exportExpiryQuery: '/api/excel/export/expiry-query',
 };
 
 // 下载/导出：构建绝对URL后直接让浏览器打开下载
@@ -1155,6 +1156,15 @@ const ExpiryQueryPage = {
     onSearch() { this.page = 1; this.loadData(); },
     onPageChange(p) { this.page = p; this.loadData(); },
     expiryTagType(s) { return s==='已过期'?'danger': s==='近效期'?'warning':'success'; },
+    downloadExport() {
+      const params = new URLSearchParams();
+      if (this.keyword) params.set('keyword', this.keyword);
+      if (this.statusFilter) params.set('status', this.statusFilter);
+      if (this.categoryFilter) params.set('category', this.categoryFilter);
+      const qs = params.toString();
+      const url = qs ? `${API.exportExpiryQuery}?${qs}` : API.exportExpiryQuery;
+      downloadUrl(url);
+    },
   },
   template: `
     <div>
@@ -1173,7 +1183,10 @@ const ExpiryQueryPage = {
               <el-option v-for="c in categoryOptions" :key="c.id" :label="c.name" :value="c.name" />
             </el-select>
           </el-col>
-          <el-col :span="3"><el-button type="primary" @click="onSearch">搜索</el-button></el-col>
+          <el-col :span="4">
+            <el-button type="primary" @click="onSearch">搜索</el-button>
+            <el-button @click="downloadExport">导出Excel</el-button>
+          </el-col>
         </el-row>
       </div>
       <el-table :data="items" border stripe size="small">
@@ -1355,7 +1368,6 @@ const ExcelPage = {
   data() {
     return {
       importMode: 'skip', importResult: null, importLoading: false,
-      batchUpdateVisible: false, batchUpdateFile: null, batchUpdateLoading: false, batchUpdateResult: null,
     };
   },
   methods: {
@@ -1394,17 +1406,6 @@ const ExcelPage = {
       } catch(e) { ElMessage.error('导入失败'); }
       this.importLoading = false;
     },
-    async handleBatchUpdate(file) {
-      this.batchUpdateLoading = true; this.batchUpdateResult = null;
-      const fd = new FormData(); fd.append('file', file.raw);
-      try {
-        const res = await fetch('/api/excel/batch-update/consumable', { method: 'POST', body: fd });
-        this.batchUpdateResult = await res.json();
-        if (this.batchUpdateResult.success) ElMessage.success(`批量更新完成: 更新${this.batchUpdateResult.updated}条`);
-        else ElMessage.error(this.batchUpdateResult.error || '更新失败');
-      } catch(e) { ElMessage.error('批量更新失败'); }
-      this.batchUpdateLoading = false;
-    },
   },
   template: `
     <div>
@@ -1419,6 +1420,7 @@ const ExcelPage = {
                 <el-radio value="skip">跳过已有编号</el-radio>
                 <el-radio value="update">更新已有编号</el-radio>
               </el-radio-group>
+              <div v-if="importMode==='update'" style="margin-bottom:8px;color:#909399;font-size:12px">更新模式：按编号匹配已有耗材，留空字段不修改</div>
               <el-upload :auto-upload="false" accept=".xlsx,.xls" :show-file-list="false" :on-change="handleImportConsumable" :disabled="importLoading">
                 <el-button type="primary" :loading="importLoading">选择Excel文件</el-button>
               </el-upload>
@@ -1439,12 +1441,6 @@ const ExcelPage = {
                 <el-button type="primary" :loading="importLoading">选择Excel文件</el-button>
               </el-upload>
               <div style="margin-top:8px"><el-button link type="info" @click="downloadTemplate('tplOutbound')">下载模板</el-button></div>
-            </div>
-            <el-divider />
-            <div class="import-section">
-              <div class="import-section-title">批量修改耗材信息</div>
-              <el-button type="warning" @click="batchUpdateVisible=true">选择Excel文件批量更新</el-button>
-              <div style="margin-top:8px"><el-button link type="info" @click="downloadTemplate('tplConsumable')">使用耗材模板填写修改数据</el-button></div>
             </div>
           </el-card>
         </el-col>
@@ -1470,29 +1466,8 @@ const ExcelPage = {
               <ul><li v-for="e in importResult.errors" :key="e">{{ e }}</li></ul>
             </div>
           </el-card>
-          <el-card v-if="batchUpdateResult" shadow="hover" style="margin-top:20px">
-            <template #header><span>批量更新结果</span></template>
-            <div class="result-info">
-              <span style="color:#67C23A">更新: {{ batchUpdateResult.updated || 0 }} 条</span>
-              <span v-if="batchUpdateResult.skipped" style="color:#909399">跳过: {{ batchUpdateResult.skipped }} 条</span>
-            </div>
-            <div v-if="batchUpdateResult.errors?.length" class="result-errors">
-              <p style="color:#F56C6C;margin:8px 0 4px">错误:</p>
-              <ul><li v-for="e in batchUpdateResult.errors" :key="e">{{ e }}</li></ul>
-            </div>
-          </el-card>
         </el-col>
       </el-row>
-      <!-- 批量更新对话框 -->
-      <el-dialog v-model="batchUpdateVisible" title="批量修改耗材信息" width="450px" destroy-on-close>
-        <p style="margin-bottom:12px;color:#909399">Excel中按"耗材编号"匹配，填写需要修改的字段（留空字段不修改）。</p>
-        <el-upload :auto-upload="false" accept=".xlsx,.xls" :show-file-list="false" :on-change="handleBatchUpdate" :disabled="batchUpdateLoading">
-          <el-button type="warning" :loading="batchUpdateLoading">选择Excel文件</el-button>
-        </el-upload>
-        <template #footer>
-          <el-button @click="batchUpdateVisible=false">关闭</el-button>
-        </template>
-      </el-dialog>
     </div>
   `
 };

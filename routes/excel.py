@@ -163,24 +163,39 @@ def import_consumables():
                     skipped += 1
                     continue
                 elif update_mode == 'update':
-                    # 更新已有记录
-                    existing.name = name
+                    # 更新已有记录（留空字段不修改）
+                    if '耗材名称' in col_idx:
+                        val = str(row.get(col_idx['耗材名称'], '')).strip()
+                        if val:
+                            existing.name = val
                     if '类别' in col_idx:
-                        existing.category = str(row.get(col_idx['类别'], '')).strip() or existing.category
+                        val = str(row.get(col_idx['类别'], '')).strip()
+                        if val:
+                            existing.category = val
                     if '品牌名称' in col_idx:
-                        existing.brand = str(row.get(col_idx['品牌名称'], '')).strip() or existing.brand
+                        val = str(row.get(col_idx['品牌名称'], '')).strip()
+                        if val:
+                            existing.brand = val
                     if '生产厂家' in col_idx:
-                        existing.manufacturer = str(row.get(col_idx['生产厂家'], '')).strip() or existing.manufacturer
+                        val = str(row.get(col_idx['生产厂家'], '')).strip()
+                        if val:
+                            existing.manufacturer = val
                     if '规格型号' in col_idx:
-                        existing.specification = str(row.get(col_idx['规格型号'], '')).strip() or existing.specification
+                        val = str(row.get(col_idx['规格型号'], '')).strip()
+                        if val:
+                            existing.specification = val
                     if '单位' in col_idx:
-                        existing.unit = str(row.get(col_idx['单位'], '')).strip() or existing.unit
+                        val = str(row.get(col_idx['单位'], '')).strip()
+                        if val:
+                            existing.unit = val
                     if '存放位置' in col_idx:
-                        existing.storage_location = str(row.get(col_idx['存放位置'], '')).strip() or existing.storage_location
+                        val = str(row.get(col_idx['存放位置'], '')).strip()
+                        if val:
+                            existing.storage_location = val
                     if '期初库存' in col_idx:
                         val = row.get(col_idx['期初库存'], '')
                         if val:
-                            existing.initial_stock = _safe_int(val, existing.initial_stock or 0)
+                            existing.initial_stock = _safe_int(val, 0)
                     # 期初生产日期/失效日期：同步到期初库存批次
                     init_prod_date = _parse_date(row.get(col_idx.get('期初生产日期'))) if '期初生产日期' in col_idx else None
                     init_exp_date = _parse_date(row.get(col_idx.get('期初失效日期'))) if '期初失效日期' in col_idx else None
@@ -194,11 +209,17 @@ def import_consumables():
                             if init_exp_date:
                                 init_batch.expiry_date = init_exp_date
                     if '库存预警值' in col_idx:
-                        existing.stock_warning_value = _safe_int(row.get(col_idx['库存预警值'], '0'), existing.stock_warning_value)
+                        val = row.get(col_idx['库存预警值'], '')
+                        if val:
+                            existing.stock_warning_value = _safe_int(val, existing.stock_warning_value)
                     if '近效期预警天数' in col_idx:
-                        existing.expiry_warning_days = _safe_int(row.get(col_idx['近效期预警天数'], '0'), existing.expiry_warning_days)
+                        val = row.get(col_idx['近效期预警天数'], '')
+                        if val:
+                            existing.expiry_warning_days = _safe_int(val, existing.expiry_warning_days)
                     if '备注' in col_idx:
-                        existing.remark = str(row.get(col_idx['备注'], '')).strip()
+                        val = str(row.get(col_idx['备注'], '')).strip()
+                        if val:
+                            existing.remark = val
                     updated += 1
                     continue
             else:
@@ -254,153 +275,6 @@ def import_consumables():
         'success': success,
         'skipped': skipped,
         'updated': updated,
-        'errors': errors[:20],
-    })
-
-
-@excel_bp.route('/batch-update/consumable', methods=['POST'])
-def batch_update_consumable():
-    """批量修改耗材信息（按编号匹配，留空字段不修改）"""
-    if 'file' not in request.files:
-        return jsonify({'error': '未找到上传文件'}), 400
-    file = request.files['file']
-    if not file.filename.endswith(('.xlsx', '.xls')):
-        return jsonify({'error': '仅支持 .xlsx / .xls 格式'}), 400
-
-    import pandas as pd
-    try:
-        df = pd.read_excel(file, sheet_name=0, dtype=str)
-        df = df.fillna('')
-    except Exception as e:
-        return jsonify({'error': f'Excel 解析失败: {str(e)}'}), 400
-
-    col_map = {
-        '耗材编号': ['耗材编号', '编号', 'code'],
-        '耗材名称': ['耗材名称', '名称', 'name'],
-        '类别': ['类别', '分类', 'category'],
-        '品牌名称': ['品牌名称', '品牌', 'brand'],
-        '生产厂家': ['生产厂家', '厂家', 'manufacturer'],
-        '规格型号': ['规格型号', '规格', 'specification'],
-        '单位': ['单位', 'unit'],
-        '存放位置': ['存放位置', '位置', 'storage_location'],
-        '期初库存': ['期初库存', '初始库存', 'initial_stock'],
-        '期初生产日期': ['期初生产日期', 'initial_production_date'],
-        '期初失效日期': ['期初失效日期', 'initial_expiry_date'],
-        '库存预警值': ['库存预警值', '预警值', 'stock_warning_value'],
-        '近效期预警天数': ['近效期预警天数', '效期预警天数', 'expiry_warning_days'],
-        '备注': ['备注', 'remark'],
-    }
-
-    col_idx = {}
-    columns_lower = {c.lower().strip(): c for c in df.columns}
-    for target, aliases in col_map.items():
-        for alias in aliases:
-            if alias.lower() in columns_lower:
-                col_idx[target] = columns_lower[alias.lower()]
-                break
-
-    if '耗材编号' not in col_idx:
-        return jsonify({'error': 'Excel缺少必填列：耗材编号'}), 400
-
-    # 日期解析工具
-    from routes.stock import _parse_date
-
-    updated = 0
-    skipped = 0
-    errors = []
-
-    def _safe_int(val, default=0):
-        try:
-            return int(float(val)) if val else default
-        except (ValueError, TypeError):
-            return default
-
-    for i, row in df.iterrows():
-        row_num = i + 2
-        try:
-            code = str(row.get(col_idx.get('耗材编号'), '')).strip()
-            if not code:
-                errors.append(f'第{row_num}行: 编号为空，跳过')
-                continue
-
-            existing = Consumable.query.filter_by(code=code).first()
-            if not existing:
-                skipped += 1
-                continue
-
-            # 仅更新非空字段
-            if '耗材名称' in col_idx:
-                val = str(row.get(col_idx['耗材名称'], '')).strip()
-                if val:
-                    existing.name = val
-            if '类别' in col_idx:
-                val = str(row.get(col_idx['类别'], '')).strip()
-                if val:
-                    existing.category = val
-            if '品牌名称' in col_idx:
-                val = str(row.get(col_idx['品牌名称'], '')).strip()
-                if val:
-                    existing.brand = val
-            if '生产厂家' in col_idx:
-                val = str(row.get(col_idx['生产厂家'], '')).strip()
-                if val:
-                    existing.manufacturer = val
-            if '规格型号' in col_idx:
-                val = str(row.get(col_idx['规格型号'], '')).strip()
-                if val:
-                    existing.specification = val
-            if '单位' in col_idx:
-                val = str(row.get(col_idx['单位'], '')).strip()
-                if val:
-                    existing.unit = val
-            if '存放位置' in col_idx:
-                val = str(row.get(col_idx['存放位置'], '')).strip()
-                if val:
-                    existing.storage_location = val
-            if '期初库存' in col_idx:
-                val = row.get(col_idx['期初库存'], '')
-                if val:
-                    existing.initial_stock = _safe_int(val, 0)
-            if '库存预警值' in col_idx:
-                val = row.get(col_idx['库存预警值'], '')
-                if val:
-                    existing.stock_warning_value = _safe_int(val, 0)
-            if '近效期预警天数' in col_idx:
-                val = row.get(col_idx['近效期预警天数'], '')
-                if val:
-                    existing.expiry_warning_days = _safe_int(val, 0)
-            if '备注' in col_idx:
-                val = str(row.get(col_idx['备注'], '')).strip()
-                if val:
-                    existing.remark = val
-
-            # 期初生产日期/失效日期：同步到期初库存批次
-            init_prod_date = _parse_date(row.get(col_idx.get('期初生产日期'))) if '期初生产日期' in col_idx else None
-            init_exp_date = _parse_date(row.get(col_idx.get('期初失效日期'))) if '期初失效日期' in col_idx else None
-            if init_prod_date or init_exp_date:
-                init_batch = StockBatch.query.filter_by(
-                    consumable_id=existing.id, batch_number='期初库存'
-                ).first()
-                if init_batch:
-                    if init_prod_date:
-                        init_batch.production_date = init_prod_date
-                    if init_exp_date:
-                        init_batch.expiry_date = init_exp_date
-
-            updated += 1
-        except Exception as e:
-            errors.append(f'第{row_num}行: {str(e)}')
-
-    try:
-        db.session.commit()
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': f'保存失败: {str(e)}'}), 500
-
-    return jsonify({
-        'success': True,
-        'updated': updated,
-        'skipped': skipped,
         'errors': errors[:20],
     })
 
@@ -542,6 +416,68 @@ def export_outbound():
     wb.save(output)
     output.seek(0)
     filename = f'出库记录_{date.today().strftime("%Y%m%d")}.xlsx'
+    return send_file(output, as_attachment=True, download_name=filename,
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
+@excel_bp.route('/export/expiry-query', methods=['GET'])
+def export_expiry_query():
+    """导出效期查询为 Excel"""
+    import openpyxl
+    keyword = request.args.get('keyword', '').strip()
+    status = request.args.get('status', '').strip()
+    category = request.args.get('category', '').strip()
+
+    # 复用与 expiry_query 相同的查询逻辑，但不分页
+    query = StockBatch.query.filter(StockBatch.quantity > 0)
+
+    if keyword:
+        query = query.join(Consumable, StockBatch.consumable_id == Consumable.id).filter(
+            db.or_(Consumable.code.contains(keyword), Consumable.name.contains(keyword))
+        )
+    else:
+        query = query.join(Consumable, StockBatch.consumable_id == Consumable.id)
+
+    if category:
+        query = query.filter(Consumable.category == category)
+
+    query = query.order_by(StockBatch.expiry_date.asc().nullslast())
+
+    batches = query.all()
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = '效期查询'
+    headers = ['序号', '耗材编号', '耗材名称', '类别', '批次', '存放位置',
+               '生产日期', '失效日期', '效期状态', '当前库存']
+    ws.append(headers)
+    idx = 0
+    for batch in batches:
+        batch_status = batch.expiry_status
+        # 效期状态过滤
+        if status == 'near_expiry' and batch_status != '近效期':
+            continue
+        if status == 'expired' and batch_status != '已过期':
+            continue
+        idx += 1
+        consumable = batch.consumable
+        ws.append([
+            idx,
+            consumable.code if consumable else '',
+            consumable.name if consumable else '',
+            consumable.category if consumable else '',
+            batch.batch_number or '-',
+            batch.storage_location or '-',
+            batch.production_date.strftime('%Y-%m-%d') if batch.production_date else '-',
+            batch.expiry_date.strftime('%Y-%m-%d') if batch.expiry_date else '-',
+            batch_status,
+            batch.quantity,
+        ])
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+    filename = f'效期查询_{date.today().strftime("%Y%m%d")}.xlsx'
     return send_file(output, as_attachment=True, download_name=filename,
                      mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
 
