@@ -1,5 +1,7 @@
 from flask import Blueprint, request, jsonify
 from models import db, Staff, Department
+from utils.db import ilike_filter as _ilike_filter
+
 
 staff_bp = Blueprint('staff', __name__)
 
@@ -14,7 +16,7 @@ def list_staff():
     if department_id:
         query = query.filter_by(department_id=department_id)
     if role:
-        query = query.filter(Staff.role.contains(role))
+        query = query.filter(_ilike_filter(Staff.role, role))
 
     staffs = query.order_by(Staff.sort_order, Staff.id).all()
     return jsonify([s.to_dict() for s in staffs])

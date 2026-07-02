@@ -7,11 +7,14 @@ from models import db as _db, Consumable, StockBatch, InboundRecord, OutboundRec
 
 @pytest.fixture(scope='function')
 def app():
-    """每个测试函数使用独立的内存数据库"""
-    app = create_app()
-    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+    """每个测试函数使用独立的内存数据库
+
+    重要：必须传入 testing=True 让 create_app 从一开始就使用内存数据库，
+    而非先创建文件数据库再修改配置。否则 db 全局单例已绑定文件数据库的
+    engine，后续 drop_all() 会销毁生产数据。
+    """
+    app = create_app(testing=True)
     app.config['TESTING'] = True
-    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
     with app.app_context():
         _db.create_all()

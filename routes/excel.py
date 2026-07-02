@@ -3,6 +3,8 @@ import os
 from datetime import datetime, date
 from flask import Blueprint, request, jsonify, send_file
 from models import db, Consumable, StockBatch, InboundRecord, OutboundRecord, Category
+from utils.db import ilike_filter as _ilike_filter
+
 
 excel_bp = Blueprint('excel', __name__)
 
@@ -310,8 +312,8 @@ def export_consumables():
     if keyword:
         query = query.filter(
             db.or_(
-                Consumable.code.contains(keyword),
-                Consumable.name.contains(keyword),
+                _ilike_filter(Consumable.code, keyword),
+                _ilike_filter(Consumable.name, keyword),
             )
         )
     items = query.order_by(Consumable.code).all()
@@ -455,7 +457,7 @@ def export_expiry_query():
 
     if keyword:
         query = query.join(Consumable, StockBatch.consumable_id == Consumable.id).filter(
-            db.or_(Consumable.code.contains(keyword), Consumable.name.contains(keyword))
+            db.or_(_ilike_filter(Consumable.code, keyword), _ilike_filter(Consumable.name, keyword))
         )
     else:
         query = query.join(Consumable, StockBatch.consumable_id == Consumable.id)

@@ -87,11 +87,17 @@ async function loadCategoryOptions() {
   } catch (e) { console.error('加载类别列表失败', e); }
 }
 
+// HTML 转义，防止 XSS
+function escapeHtml(str) {
+  if (str == null) return '';
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 // 打印单据（打开新窗口打印）
 function printDocument(title, htmlContent) {
   const win = window.open('', '_blank');
   if (!win) { ElMessage.error('请允许弹出窗口以打印'); return; }
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(title)}</title>
     <style>
       body { font-family: 'Microsoft YaHei', sans-serif; padding: 30px; color: #333; }
       h2 { text-align: center; margin-bottom: 20px; }
@@ -423,17 +429,17 @@ const InboundPage = {
         const data = await res.json();
         const html = `
           <h2>入库单</h2>
-          <div class="print-info"><span>入库单号：${data.document_number || '-'}</span><span>入库时间：${data.inbound_time || '-'}</span></div>
-          <div class="print-info"><span>经办人：${data.operator || '-'}</span><span>存放位置：${data.storage_location || '-'}</span></div>
+          <div class="print-info"><span>入库单号：${escapeHtml(data.document_number) || '-'}</span><span>入库时间：${escapeHtml(data.inbound_time) || '-'}</span></div>
+          <div class="print-info"><span>经办人：${escapeHtml(data.operator) || '-'}</span><span>存放位置：${escapeHtml(data.storage_location) || '-'}</span></div>
           <div style="clear:both"></div>
           <table>
             <tr><th>耗材编号</th><th>耗材名称</th><th>规格型号</th><th>品牌</th><th>单位</th><th>批号</th><th>生产日期</th><th>失效日期</th><th>数量</th><th>备注</th></tr>
             <tr>
-              <td>${data.consumable_code || ''}</td><td>${data.consumable_name || ''}</td>
-              <td>${data.consumable_spec || ''}</td><td>${data.consumable_brand || ''}</td>
-              <td>${data.consumable_unit || ''}</td><td>${data.batch_number || ''}</td>
-              <td>${data.production_date || ''}</td><td>${data.expiry_date || ''}</td>
-              <td>${data.quantity}</td><td>${data.remark || ''}</td>
+              <td>${escapeHtml(data.consumable_code) || ''}</td><td>${escapeHtml(data.consumable_name) || ''}</td>
+              <td>${escapeHtml(data.consumable_spec) || ''}</td><td>${escapeHtml(data.consumable_brand) || ''}</td>
+              <td>${escapeHtml(data.consumable_unit) || ''}</td><td>${escapeHtml(data.batch_number) || ''}</td>
+              <td>${escapeHtml(data.production_date) || ''}</td><td>${escapeHtml(data.expiry_date) || ''}</td>
+              <td>${data.quantity}</td><td>${escapeHtml(data.remark) || ''}</td>
             </tr>
           </table>
           <div class="print-footer"><span>经办人签字：__________</span><span>验收人签字：__________</span><span>日期：__________</span></div>`;
@@ -596,23 +602,23 @@ const OutboundPage = {
     },
     formatBatchNumbers(bn, detail) {
       if (!bn) return '';
-      // 优先使用 batch_detail 展示每个批号及扣减数量
+      // 优先使用 batch_detail 展示每个批号及扣减数量（使用安全文本渲染）
       if (detail && Array.isArray(detail) && detail.length > 0) {
-        return detail.map(d => `<div style="line-height:1.6">${d.batch_number}(${d.quantity})</div>`).join('');
+        return detail.map(d => d.batch_number + '(' + d.quantity + ')').join(', ');
       }
       // 兼容旧数据：仅逗号分隔批号
       const parts = bn.split(',').filter(s => s.trim());
       if (parts.length <= 1) return bn;
-      return parts.map(b => `<div style="line-height:1.6">${b}</div>`).join('');
+      return parts.join(', ');
     },
     formatBatchNumberForPrint(item) {
-      // 打印模板中批号展示（纯文本，用<br/>换行）
+      // 打印模板中批号展示（纯文本，换行用逗号分隔）
       const detail = item.batch_detail;
       const bn = item.batch_number || '';
       if (detail && Array.isArray(detail) && detail.length > 0) {
-        return detail.map(d => `${d.batch_number}(${d.quantity})`).join('<br/>');
+        return detail.map(d => escapeHtml(d.batch_number) + '(' + d.quantity + ')').join(', ');
       }
-      return bn.replace(/,/g, '<br/>');
+      return escapeHtml(bn);
     },
     gotoExcel() { this.$router.push('/excel'); },
     async printRecord(row) {
@@ -623,16 +629,16 @@ const OutboundPage = {
         const items = data.items || [];
         const rows = items.map(item => `
           <tr>
-            <td>${item.consumable_code || ''}</td><td>${item.consumable_name || ''}</td>
-            <td>${item.consumable_spec || ''}</td><td>${item.consumable_brand || ''}</td>
-            <td>${item.consumable_unit || ''}</td><td>${this.formatBatchNumberForPrint(item)}</td>
-            <td>${item.quantity}</td><td>${item.remark || ''}</td>
+            <td>${escapeHtml(item.consumable_code) || ''}</td><td>${escapeHtml(item.consumable_name) || ''}</td>
+            <td>${escapeHtml(item.consumable_spec) || ''}</td><td>${escapeHtml(item.consumable_brand) || ''}</td>
+            <td>${escapeHtml(item.consumable_unit) || ''}</td><td>${this.formatBatchNumberForPrint(item)}</td>
+            <td>${item.quantity}</td><td>${escapeHtml(item.remark) || ''}</td>
           </tr>`).join('');
         const html = `
           <h2>出库单</h2>
-          <div class="print-info"><span>出库单号：${row.document_number || '-'}</span><span>出库时间：${row.outbound_time || '-'}</span></div>
-          <div class="print-info"><span>领用科室：${row.department || '-'}</span><span>领用人：${row.recipient || '-'}</span></div>
-          <div class="print-info"><span>经办人：${row.operator || '-'}</span></div>
+          <div class="print-info"><span>出库单号：${escapeHtml(row.document_number) || '-'}</span><span>出库时间：${escapeHtml(row.outbound_time) || '-'}</span></div>
+          <div class="print-info"><span>领用科室：${escapeHtml(row.department) || '-'}</span><span>领用人：${escapeHtml(row.recipient) || '-'}</span></div>
+          <div class="print-info"><span>经办人：${escapeHtml(row.operator) || '-'}</span></div>
           <div style="clear:both"></div>
           <table>
             <tr><th>耗材编号</th><th>耗材名称</th><th>规格型号</th><th>品牌</th><th>单位</th><th>批号</th><th>数量</th><th>备注</th></tr>
@@ -665,7 +671,7 @@ const OutboundPage = {
         <el-table-column prop="consumable_spec" label="规格型号" width="110" />
         <el-table-column label="批号" width="150">
           <template #default="{row}">
-            <span v-html="formatBatchNumbers(row.batch_number, row.batch_detail)"></span>
+            <span v-text="formatBatchNumbers(row.batch_number, row.batch_detail)"></span>
           </template>
         </el-table-column>
         <el-table-column prop="quantity" label="出库数量" width="75" />

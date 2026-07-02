@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from datetime import date as date_type
-from models import db, Consumable, StockBatch
+from models import db, Consumable, StockBatch, InboundRecord, OutboundRecord
+from utils.db import ilike_filter as _ilike_filter
 
 
 def _to_date(val):
@@ -27,11 +28,11 @@ def list_consumables():
     if keyword:
         query = query.filter(
             db.or_(
-                Consumable.code.contains(keyword),
-                Consumable.name.contains(keyword),
-                Consumable.brand.contains(keyword),
-                Consumable.manufacturer.contains(keyword),
-                Consumable.specification.contains(keyword),
+                _ilike_filter(Consumable.code, keyword),
+                _ilike_filter(Consumable.name, keyword),
+                _ilike_filter(Consumable.brand, keyword),
+                _ilike_filter(Consumable.manufacturer, keyword),
+                _ilike_filter(Consumable.specification, keyword),
             )
         )
     if category:
@@ -163,12 +164,18 @@ def update_consumable(consumable_id):
 
 @consumable_bp.route('/<int:consumable_id>', methods=['DELETE'])
 def delete_consumable(consumable_id):
-    """删除耗材（连同出入库记录和批次）"""
+    """删除耗材（有历史记录时拒绝删除）"""
     c = Consumable.query.get_or_404(consumable_id)
     # 检查是否有库存
     if c.total_stock > 0:
         return jsonify({'error': '该耗材仍有库存，无法删除。请先出库清零后再删除。'}), 400
-
+    # 检查是否有入库/出库历史记录
+    inbound_count = InboundRecord.query.filter_by(consumable_id=consumable_id).count()
+    if inbound_count > 0:
+        return jsonify({'error': f'该耗材存在 {inbound_count} 条入库记录，无法删除。历史记录需保留以供追溯。'}), 400
+    outbound_count = OutboundRecord.query.filter_by(consumable_id=consumable_id).count()
+    if outbound_count > 0:
+        return jsonify({'error': f'该耗材存在 {outbound_count} 条出库记录，无法删除。历史记录需保留以供追溯。'}), 400
     db.session.delete(c)
     db.session.commit()
     return jsonify({'message': '删除成功'})

@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from models import db, Category
+from models import db, Category, Consumable
 
 category_bp = Blueprint('category', __name__)
 
@@ -56,6 +56,9 @@ def update_category(cat_id):
 def delete_category(cat_id):
     """删除类别"""
     cat = Category.query.get_or_404(cat_id)
+    consumable_count = Consumable.query.filter_by(category=cat.name).count()
+    if consumable_count > 0:
+        return jsonify({'error': f'该类别下存在 {consumable_count} 个耗材，无法删除'}), 400
     db.session.delete(cat)
     db.session.commit()
     return jsonify({'message': '删除成功'})

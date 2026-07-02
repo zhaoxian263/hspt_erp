@@ -2,12 +2,13 @@ import json
 from datetime import datetime, date
 from flask import Blueprint, request, jsonify
 from models import db, Consumable, StockBatch, InboundRecord, OutboundRecord, InventoryCheck
+from utils.db import ilike_filter as _ilike_filter
 
 stock_bp = Blueprint('stock', __name__)
 
 
 def _generate_document_number(prefix):
-    """生成单号：RK+日期+序号 或 CK+日期+序号"""
+    """生成单号：RK+日期+序号 或 CK+日期+序号（使用行级锁防止并发重复）"""
     today_str = datetime.now().strftime('%Y%m%d')
     today_start = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
     today_end = datetime.now().replace(hour=23, minute=59, second=59, microsecond=999999)
@@ -19,11 +20,11 @@ def _generate_document_number(prefix):
         model = OutboundRecord
         field = OutboundRecord.outbound_time
 
-    # 查找今天已有的最大序号
+    # 使用 with_for_update() 加行级锁，防止并发请求读到相同序号
     last_record = model.query.filter(
         field >= today_start,
         field <= today_end,
-    ).order_by(model.id.desc()).first()
+    ).order_by(model.id.desc()).with_for_update().first()
 
     seq = 1
     if last_record and last_record.document_number:
@@ -52,11 +53,11 @@ def list_inbound():
     if keyword:
         query = query.join(Consumable).filter(
             db.or_(
-                Consumable.code.contains(keyword),
-                Consumable.name.contains(keyword),
-                InboundRecord.batch_number.contains(keyword),
-                InboundRecord.operator.contains(keyword),
-                InboundRecord.document_number.contains(keyword),
+                _ilike_filter(Consumable.code, keyword),
+                _ilike_filter(Consumable.name, keyword),
+                _ilike_filter(InboundRecord.batch_number, keyword),
+                _ilike_filter(InboundRecord.operator, keyword),
+                _ilike_filter(InboundRecord.document_number, keyword),
             )
         )
     if start_date:
@@ -86,6 +87,8 @@ def create_inbound():
 
     consumable_id = data['consumable_id']
     quantity = int(data['quantity'])
+    if quantity <= 0:
+        return jsonify({'error': '入库数量必须大于0'}), 400
     batch_number = data.get('batch_number', '').strip()
 
     # 验证耗材存在
@@ -119,6 +122,7 @@ def create_inbound():
         remark=data.get('remark'),
     )
     db.session.add(record)
+    db.session.flush()  # 获取 record.id 用于关联批次
 
     # 每次入库都创建独立批次（保证 FIFO 顺序正确）
     batch = StockBatch(
@@ -129,6 +133,7 @@ def create_inbound():
         quantity=quantity,
         storage_location=data.get('storage_location'),
         remark=data.get('remark'),
+        inbound_record_id=record.id,
     )
     db.session.add(batch)
 
@@ -140,13 +145,26 @@ def create_inbound():
 def delete_inbound(record_id):
     """删除入库记录（同时扣减库存批次）"""
     record = InboundRecord.query.get_or_404(record_id)
-    # 扣减对应批次库存
+    # 优先通过 inbound_record_id 精确匹配批次
     batch = StockBatch.query.filter_by(
         consumable_id=record.consumable_id,
-        batch_number=record.batch_number,
+        inbound_record_id=record.id,
     ).first()
     if batch:
-        batch.quantity -= record.quantity
+        # 该批次由本入库记录创建，直接删除整个批次
+        db.session.delete(batch)
+    elif record.batch_number:
+        # 回退：按批号+最新创建时间匹配（兼容无 inbound_record_id 的旧数据）
+        batch = StockBatch.query.filter_by(
+            consumable_id=record.consumable_id,
+            batch_number=record.batch_number,
+        ).order_by(StockBatch.created_at.desc()).first()
+        if batch:
+            if batch.quantity - record.quantity < 0:
+                return jsonify({'error': f'批次 {record.batch_number} 库存不足，当前库存 {batch.quantity}，需扣减 {record.quantity}'}), 400
+            batch.quantity -= record.quantity
+            if batch.quantity <= 0:
+                db.session.delete(batch)
     db.session.delete(record)
     db.session.commit()
     return jsonify({'message': '删除成功'})
@@ -184,12 +202,12 @@ def list_outbound():
     if keyword:
         query = query.join(Consumable).filter(
             db.or_(
-                Consumable.code.contains(keyword),
-                Consumable.name.contains(keyword),
-                OutboundRecord.batch_number.contains(keyword),
-                OutboundRecord.recipient.contains(keyword),
-                OutboundRecord.department.contains(keyword),
-                OutboundRecord.document_number.contains(keyword),
+                _ilike_filter(Consumable.code, keyword),
+                _ilike_filter(Consumable.name, keyword),
+                _ilike_filter(OutboundRecord.batch_number, keyword),
+                _ilike_filter(OutboundRecord.recipient, keyword),
+                _ilike_filter(OutboundRecord.department, keyword),
+                _ilike_filter(OutboundRecord.document_number, keyword),
             )
         )
     if start_date:
@@ -305,6 +323,11 @@ def create_outbound():
                     for bn, qty in deducted_batches if bn
                 ], ensure_ascii=False)
 
+            # 清理数量为0的批次
+            for batch in batches:
+                if batch.quantity <= 0:
+                    db.session.delete(batch)
+
             created_records.append(record)
 
         db.session.commit()
@@ -316,6 +339,8 @@ def create_outbound():
 
         consumable_id = data['consumable_id']
         quantity = int(data['quantity'])
+        if quantity <= 0:
+            return jsonify({'error': '出库数量必须大于0'}), 400
 
         consumable = Consumable.query.get(consumable_id)
         if not consumable:
@@ -381,6 +406,11 @@ def create_outbound():
                 {'batch_number': bn, 'quantity': qty}
                 for bn, qty in deducted_batches if bn
             ], ensure_ascii=False)
+
+        # 清理数量为0的批次
+        for batch in batches:
+            if batch.quantity <= 0:
+                db.session.delete(batch)
 
         db.session.commit()
         return jsonify(record.to_dict(include_consumable=True)), 201
@@ -490,7 +520,7 @@ def expiry_query():
     # 关联耗材进行筛选
     if keyword:
         query = query.join(Consumable, StockBatch.consumable_id == Consumable.id).filter(
-            db.or_(Consumable.code.contains(keyword), Consumable.name.contains(keyword))
+            db.or_(_ilike_filter(Consumable.code, keyword), _ilike_filter(Consumable.name, keyword))
         )
     else:
         query = query.join(Consumable, StockBatch.consumable_id == Consumable.id)
@@ -547,21 +577,36 @@ def list_inventory():
     if keyword:
         query = query.filter(
             db.or_(
-                Consumable.code.contains(keyword),
-                Consumable.name.contains(keyword),
-                Consumable.brand.contains(keyword),
-                Consumable.manufacturer.contains(keyword),
+                _ilike_filter(Consumable.code, keyword),
+                _ilike_filter(Consumable.name, keyword),
+                _ilike_filter(Consumable.brand, keyword),
+                _ilike_filter(Consumable.manufacturer, keyword),
             )
         )
     if category:
         query = query.filter(Consumable.category == category)
 
+    # 无状态过滤时直接数据库分页，避免内存加载全部数据
+    if not status_filter or status_filter == 'all':
+        pagination = query.order_by(Consumable.code).paginate(page=page, per_page=page_size, error_out=False)
+        items = []
+        for c in pagination.items:
+            item = c.to_dict(include_stock=True)
+            item['stock_batches'] = [b.to_dict() for b in c.stock_batches.filter(StockBatch.quantity > 0).all()]
+            items.append(item)
+        return jsonify({
+            'items': items,
+            'total': pagination.total,
+            'page': pagination.page,
+            'page_size': pagination.per_page,
+        })
+
+    # 有状态过滤时需在 Python 层面过滤（因 stock_status/expiry_status 是计算属性）
     items = query.order_by(Consumable.code).all()
     result = []
     for c in items:
         item = c.to_dict(include_stock=True)
         item['stock_batches'] = [b.to_dict() for b in c.stock_batches.filter(StockBatch.quantity > 0).all()]
-        # 状态过滤
         if status_filter == 'normal' and item['stock_status'] != '库存正常':
             continue
         elif status_filter == 'low_or_warning' and item['stock_status'] not in ('库存不足', '库存预警'):
@@ -613,8 +658,8 @@ def period_inventory():
     if keyword:
         query = query.filter(
             db.or_(
-                Consumable.code.contains(keyword),
-                Consumable.name.contains(keyword),
+                _ilike_filter(Consumable.code, keyword),
+                _ilike_filter(Consumable.name, keyword),
             )
         )
     if category:
@@ -701,24 +746,56 @@ def dashboard():
     total_outbound = db.session.query(db.func.sum(OutboundRecord.quantity)).scalar() or 0
     total_stock = db.session.query(db.func.sum(StockBatch.quantity)).scalar() or 0
 
-    # 库存预警
+    # 库存预警：用批量聚合查询替代逐条访问计算属性
     warning_items = []
     expired_items = []
-    for c in Consumable.query.all():
-        stock_status = c.stock_status
-        expiry_status = c.expiry_status
-        if stock_status in ('库存预警', '库存不足'):
-            warning_items.append({
-                'code': c.code, 'name': c.name,
-                'total_stock': c.total_stock,
-                'stock_warning_value': c.stock_warning_value,
-                'status': stock_status,
-            })
-        if expiry_status in ('近效期', '已过期'):
-            expired_items.append({
-                'code': c.code, 'name': c.name,
-                'expiry_status': expiry_status,
-            })
+    # 一次性获取所有耗材的预警值和库存总量
+    consumable_stock = db.session.query(
+        Consumable.id, Consumable.code, Consumable.name,
+        Consumable.stock_warning_value, Consumable.expiry_warning_days,
+        db.func.coalesce(db.func.sum(StockBatch.quantity), 0).label('total_stock'),
+    ).outerjoin(StockBatch, StockBatch.consumable_id == Consumable.id) \
+     .group_by(Consumable.id).all()
+
+    for c_id, code, name, warning_val, expiry_days, stock_qty in consumable_stock:
+        stock_qty = int(stock_qty)
+        # 库存状态判断
+        if warning_val > 0:
+            if stock_qty <= 0 or stock_qty <= warning_val:
+                warning_items.append({
+                    'code': code, 'name': name,
+                    'total_stock': stock_qty,
+                    'stock_warning_value': warning_val,
+                    'status': '库存不足',
+                })
+            elif stock_qty <= warning_val * 1.5:
+                warning_items.append({
+                    'code': code, 'name': name,
+                    'total_stock': stock_qty,
+                    'stock_warning_value': warning_val,
+                    'status': '库存预警',
+                })
+
+    # 效期预警：批量查询最近过期的批次
+    today = date.today()
+    expiry_batches = db.session.query(
+        StockBatch.consumable_id,
+        db.func.min(StockBatch.expiry_date).label('nearest_expiry'),
+    ).filter(
+        StockBatch.quantity > 0,
+        StockBatch.expiry_date.isnot(None),
+    ).group_by(StockBatch.consumable_id).all()
+
+    # 建立 consumable_id → (expiry_warning_days, code, name) 映射
+    consumable_map = {c.id: (c.expiry_warning_days, c.code, c.name) for c in Consumable.query.all()}
+    for cid, nearest in expiry_batches:
+        if nearest is None or cid not in consumable_map:
+            continue
+        expiry_days, code, name = consumable_map[cid]
+        if nearest < today:
+            expired_items.append({'code': code, 'name': name, 'expiry_status': '已过期'})
+        elif expiry_days > 0 and (nearest - today).days <= expiry_days:
+            expired_items.append({'code': code, 'name': name, 'expiry_status': '近效期'})
 
     # 科室出库统计
     dept_stats = db.session.query(
@@ -728,10 +805,30 @@ def dashboard():
      .group_by(OutboundRecord.department).all()
     dept_data = [{'department': d, 'total': int(t)} for d, t in dept_stats]
 
-    # 近期出入库趋势（近30天，按日聚合）
+    # 近期出入库趋势（近30天，批量聚合查询替代逐天循环）
     from datetime import timedelta
-    today = date.today()
     trend_start = today - timedelta(days=29)
+    trend_end = today + timedelta(days=1)
+
+    inbound_trend_data = db.session.query(
+        db.func.date(InboundRecord.inbound_time).label('d'),
+        db.func.sum(InboundRecord.quantity).label('total'),
+    ).filter(
+        InboundRecord.inbound_time >= trend_start.strftime('%Y-%m-%d'),
+        InboundRecord.inbound_time < trend_end.strftime('%Y-%m-%d'),
+    ).group_by(db.func.date(InboundRecord.inbound_time)).all()
+
+    outbound_trend_data = db.session.query(
+        db.func.date(OutboundRecord.outbound_time).label('d'),
+        db.func.sum(OutboundRecord.quantity).label('total'),
+    ).filter(
+        OutboundRecord.outbound_time >= trend_start.strftime('%Y-%m-%d'),
+        OutboundRecord.outbound_time < trend_end.strftime('%Y-%m-%d'),
+    ).group_by(db.func.date(OutboundRecord.outbound_time)).all()
+
+    inbound_map = {str(d): int(t) for d, t in inbound_trend_data}
+    outbound_map = {str(d): int(t) for d, t in outbound_trend_data}
+
     trend_days = []
     inbound_trend = []
     outbound_trend = []
@@ -739,16 +836,8 @@ def dashboard():
         d = trend_start + timedelta(days=i)
         d_str = d.strftime('%Y-%m-%d')
         trend_days.append(d_str)
-        ib = db.session.query(db.func.coalesce(db.func.sum(InboundRecord.quantity), 0)) \
-            .filter(InboundRecord.inbound_time >= d_str,
-                    InboundRecord.inbound_time < (d + timedelta(days=1)).strftime('%Y-%m-%d')) \
-            .scalar() or 0
-        ob = db.session.query(db.func.coalesce(db.func.sum(OutboundRecord.quantity), 0)) \
-            .filter(OutboundRecord.outbound_time >= d_str,
-                    OutboundRecord.outbound_time < (d + timedelta(days=1)).strftime('%Y-%m-%d')) \
-            .scalar() or 0
-        inbound_trend.append(int(ib))
-        outbound_trend.append(int(ob))
+        inbound_trend.append(inbound_map.get(d_str, 0))
+        outbound_trend.append(outbound_map.get(d_str, 0))
 
     # 最近盘点摘要
     last_check = InventoryCheck.query.order_by(InventoryCheck.check_date.desc()).first()

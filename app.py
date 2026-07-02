@@ -2,18 +2,27 @@ import os
 import sys
 import sqlite3
 import shutil
+import traceback
 from datetime import datetime
-from flask import Flask, render_template, send_from_directory
+from flask import Flask, render_template, send_from_directory, jsonify
 from config import SQLALCHEMY_DATABASE_URI, SQLALCHEMY_TRACK_MODIFICATIONS, SECRET_KEY, MAX_CONTENT_LENGTH
 from models import db
 
 
-def create_app():
+def create_app(testing=False):
+    """创建 Flask 应用实例
+
+    Args:
+        testing: 若为 True，使用内存数据库（仅供测试使用，防止测试销毁生产数据）
+    """
     app = Flask(__name__,
                 template_folder=os.path.join(os.path.dirname(__file__), 'templates'),
                 static_folder=os.path.join(os.path.dirname(__file__), 'static'))
 
-    app.config['SQLALCHEMY_DATABASE_URI'] = SQLALCHEMY_DATABASE_URI
+    if testing:
+        app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///:memory:'
+    else:
+        app.config['SQLALCHEMY_DATABASE_URI'] = SQLALCHEMY_DATABASE_URI
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = SQLALCHEMY_TRACK_MODIFICATIONS
     app.config['SECRET_KEY'] = SECRET_KEY
     app.config['MAX_CONTENT_LENGTH'] = MAX_CONTENT_LENGTH
@@ -22,6 +31,29 @@ def create_app():
 
     from routes import register_blueprints
     register_blueprints(app)
+
+    # 全局错误处理：API 请求返回 JSON，页面请求返回友好提示
+    @app.errorhandler(400)
+    @app.errorhandler(404)
+    @app.errorhandler(405)
+    @app.errorhandler(500)
+    def handle_error(e):
+        if request_wants_json():
+            return jsonify({'error': e.description if hasattr(e, 'description') else str(e)}), e.code
+        return render_template('index.html'), e.code
+
+    def request_wants_json():
+        """判断请求是否期望 JSON 响应"""
+        from flask import request as req
+        best = req.accept_mimetypes.best_match(['application/json', 'text/html'])
+        return best == 'application/json' and req.accept_mimetypes[best] > req.accept_mimetypes.get('text/html', 0)
+
+    @app.errorhandler(Exception)
+    def handle_unhandled_exception(e):
+        """捕获未处理异常，返回 JSON 而非 500 HTML 页面"""
+        if request_wants_json():
+            return jsonify({'error': '服务器内部错误'}), 500
+        return render_template('index.html'), 500
 
     @app.route('/')
     def index():
@@ -250,12 +282,12 @@ def init_db(app):
             timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
             backup_path = os.path.join(backup_dir, f'erp_{timestamp}.db')
             shutil.copy2(db_path, backup_path)
-            # 只保留最近5个备份
+            # 只保留最近20个备份
             backups = sorted(
                 [f for f in os.listdir(backup_dir) if f.startswith('erp_') and f.endswith('.db')],
                 reverse=True
             )
-            for old_backup in backups[5:]:
+            for old_backup in backups[20:]:
                 os.remove(os.path.join(backup_dir, old_backup))
             print(f'✅ 数据库已备份 → {backup_path}')
 

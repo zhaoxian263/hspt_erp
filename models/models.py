@@ -203,6 +203,7 @@ class StockBatch(db.Model):
     quantity = db.Column(db.Integer, default=0, comment='当前库存数量')
     storage_location = db.Column(db.String(200), nullable=True, comment='存放位置')
     remark = db.Column(db.Text, nullable=True, comment='备注')
+    inbound_record_id = db.Column(db.Integer, db.ForeignKey('inbound_record.id'), nullable=True, comment='关联入库记录ID')
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 

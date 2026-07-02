@@ -1,5 +1,5 @@
 from flask import Blueprint, request, jsonify
-from models import db, Department
+from models import db, Department, Staff
 
 dept_bp = Blueprint('department', __name__)
 
@@ -56,6 +56,9 @@ def update_department(dept_id):
 def delete_department(dept_id):
     """删除科室"""
     dept = Department.query.get_or_404(dept_id)
+    staff_count = Staff.query.filter_by(department_id=dept_id).count()
+    if staff_count > 0:
+        return jsonify({'error': f'该科室下存在 {staff_count} 名人员，无法删除'}), 400
     db.session.delete(dept)
     db.session.commit()
     return jsonify({'message': '删除成功'})
