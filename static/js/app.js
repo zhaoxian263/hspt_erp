@@ -315,6 +315,9 @@ const ConsumablePage = {
         </el-table-column>
         <el-table-column prop="stock_warning_value" label="库存预警值" width="90" />
         <el-table-column prop="expiry_warning_days" label="效期预警值" width="90" />
+        <el-table-column prop="remark" label="备注" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="created_at" label="创建时间" width="160" />
+        <el-table-column prop="updated_at" label="修改时间" width="160" />
         <el-table-column label="操作" width="120" fixed="right">
           <template #default="{row}">
             <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
@@ -356,6 +359,10 @@ const ConsumablePage = {
           <el-row :gutter="16" v-if="form.initial_stock > 0">
             <el-col :span="12"><el-form-item label="生产日期"><el-date-picker v-model="form.initial_production_date" type="date" value-format="YYYY-MM-DD" placeholder="期初库存生产日期" style="width:100%" /></el-form-item></el-col>
             <el-col :span="12"><el-form-item label="失效日期"><el-date-picker v-model="form.initial_expiry_date" type="date" value-format="YYYY-MM-DD" placeholder="期初库存失效日期" style="width:100%" /></el-form-item></el-col>
+          </el-row>
+          <el-row :gutter="16" v-if="isEdit">
+            <el-col :span="12"><el-form-item label="创建时间"><el-input :model-value="form.created_at" disabled /></el-form-item></el-col>
+            <el-col :span="12"><el-form-item label="修改时间"><el-input :model-value="form.updated_at" disabled /></el-form-item></el-col>
           </el-row>
           <el-divider content-position="left">其他</el-divider>
           <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" placeholder="选填" /></el-form-item>
@@ -461,6 +468,7 @@ const InboundPage = {
         <el-table-column prop="storage_location" label="存放位置" width="90" />
         <el-table-column prop="operator" label="经办人" width="70" />
         <el-table-column prop="inbound_time" label="入库时间" width="150" />
+        <el-table-column prop="remark" label="备注" min-width="120" show-overflow-tooltip />
         <el-table-column label="操作" width="110" fixed="right">
           <template #default="{row}">
             <el-button link type="primary" size="small" @click="printRecord(row)">打印</el-button>
@@ -665,6 +673,7 @@ const OutboundPage = {
         <el-table-column prop="department" label="领用科室" width="90" />
         <el-table-column prop="operator" label="经办人" width="70" />
         <el-table-column prop="outbound_time" label="出库时间" width="150" />
+        <el-table-column prop="remark" label="备注" min-width="120" show-overflow-tooltip />
         <el-table-column label="操作" width="110" fixed="right">
           <template #default="{row}">
             <el-button link type="primary" size="small" @click="printRecord(row)">打印</el-button>

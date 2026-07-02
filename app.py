@@ -34,6 +34,41 @@ def create_app():
     return app
 
 
+def _migrate_legacy_columns(cursor, conn):
+    """将旧列名的数据复制到新列名（旧版数据库字段名不一致时的迁移）"""
+    # 获取各表现有列名
+    def get_columns(table):
+        cursor.execute(f"PRAGMA table_info({table})")
+        return {row[1] for row in cursor.fetchall()}
+
+    # inbound_record: inbound_date → inbound_time, create_time → created_at
+    cols = get_columns('inbound_record')
+    if 'inbound_date' in cols and 'inbound_time' in cols:
+        cursor.execute("UPDATE inbound_record SET inbound_time = inbound_date WHERE inbound_time IS NULL AND inbound_date IS NOT NULL")
+        print('  ✅ inbound_record: inbound_date → inbound_time 数据迁移')
+    if 'create_time' in cols and 'created_at' in cols:
+        cursor.execute("UPDATE inbound_record SET created_at = create_time WHERE created_at IS NULL AND create_time IS NOT NULL")
+        print('  ✅ inbound_record: create_time → created_at 数据迁移')
+
+    # outbound_record: create_time → created_at
+    cols = get_columns('outbound_record')
+    if 'create_time' in cols and 'created_at' in cols:
+        cursor.execute("UPDATE outbound_record SET created_at = create_time WHERE created_at IS NULL AND create_time IS NOT NULL")
+        print('  ✅ outbound_record: create_time → created_at 数据迁移')
+
+    # stock_batch: create_time → created_at
+    cols = get_columns('stock_batch')
+    if 'create_time' in cols and 'created_at' in cols:
+        cursor.execute("UPDATE stock_batch SET created_at = create_time WHERE created_at IS NULL AND create_time IS NOT NULL")
+        print('  ✅ stock_batch: create_time → created_at 数据迁移')
+
+    # consumable: create_time → created_at
+    cols = get_columns('consumable')
+    if 'create_time' in cols and 'created_at' in cols:
+        cursor.execute("UPDATE consumable SET created_at = create_time WHERE created_at IS NULL AND create_time IS NOT NULL")
+        print('  ✅ consumable: create_time → created_at 数据迁移')
+
+
 def _migrate_db(db_path):
     """对已有 SQLite 数据库执行增量迁移（添加新列）"""
     if not os.path.exists(db_path):
@@ -51,16 +86,29 @@ def _migrate_db(db_path):
             ('category', 'VARCHAR(100)'),
             ('storage_location', 'VARCHAR(200)'),
             ('initial_stock', 'INTEGER DEFAULT 0'),
+            ('manufacturer', 'VARCHAR(200)'),
+            ('remark', 'TEXT'),
+            ('created_at', 'DATETIME'),
+            ('updated_at', 'DATETIME'),
         ],
         'inbound_record': [
             ('document_number', 'VARCHAR(50)'),
             ('storage_location', 'VARCHAR(200)'),
+            ('production_date', 'DATE'),
+            ('expiry_date', 'DATE'),
+            ('inbound_time', 'DATETIME'),
         ],
         'outbound_record': [
             ('document_number', 'VARCHAR(50)'),
+            ('batch_detail', 'TEXT'),
+            ('outbound_time', 'DATETIME'),
         ],
         'stock_batch': [
             ('storage_location', 'VARCHAR(200)'),
+            ('remark', 'TEXT'),
+            ('inbound_record_id', 'INTEGER'),
+            ('created_at', 'DATETIME'),
+            ('updated_at', 'DATETIME'),
         ],
     }
     for table, columns in migrations.items():
@@ -78,6 +126,8 @@ def _migrate_db(db_path):
                     print(f'  ✅ {table}.{col_name} 已添加')
                 except sqlite3.OperationalError:
                     pass
+    # 旧字段数据迁移：将旧列名的数据复制到新列名
+    _migrate_legacy_columns(cursor, conn)
     conn.commit()
     conn.close()
     # 去掉 document_number 的 unique 约束（SQLite 需重建表）

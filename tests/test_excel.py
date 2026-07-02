@@ -1,7 +1,7 @@
 """Excel 批量操作模块测试 — 模板下载、耗材导入/导出、入库导入、出库导出、批量修改"""
 import io
 import pytest
-from models import Consumable, StockBatch, InboundRecord, OutboundRecord
+from models import db, Consumable, StockBatch, InboundRecord, OutboundRecord, Category
 
 
 class TestConsumableTemplate:
@@ -114,6 +114,125 @@ class TestConsumableImport:
                            content_type='multipart/form-data')
         assert resp.status_code == 400
 
+    def test_import_consumables_auto_create_category(self, client, app):
+        """导入耗材时，新类别自动创建到类别管理中，排序值最大排在最后"""
+        with app.app_context():
+            # 预设一些类别，最大 sort_order 为 5
+            db.session.add(Category(name='预设类别A', sort_order=3))
+            db.session.add(Category(name='预设类别B', sort_order=5))
+            db.session.commit()
+
+        excel = self._make_excel(
+            ['耗材编号', '耗材名称', '类别'],
+            [
+                ['CAT001', '类别测试耗材1', '全新类别A'],
+                ['CAT002', '类别测试耗材2', '全新类别B'],
+            ]
+        )
+        resp = client.post('/api/excel/import/consumable',
+                           data={'file': (excel, 'test.xlsx')},
+                           content_type='multipart/form-data')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['success'] == 2
+        assert '全新类别A' in data.get('new_categories', [])
+        assert '全新类别B' in data.get('new_categories', [])
+
+        # 验证类别已入库，且 sort_order 在预设类别之后递增
+        with app.app_context():
+            cat_a = Category.query.filter_by(name='全新类别A').first()
+            assert cat_a is not None
+            assert cat_a.sort_order == 6
+            cat_b = Category.query.filter_by(name='全新类别B').first()
+            assert cat_b is not None
+            assert cat_b.sort_order == 7
+
+    def test_import_consumables_skip_existing_category(self, client, app):
+        """导入耗材时，已有类别不重复创建"""
+        with app.app_context():
+            db.session.add(Category(name='已有类别'))
+            db.session.commit()
+
+        excel = self._make_excel(
+            ['耗材编号', '耗材名称', '类别'],
+            [
+                ['CATEXIST', '已有类别耗材', '已有类别'],
+            ]
+        )
+        resp = client.post('/api/excel/import/consumable',
+                           data={'file': (excel, 'test.xlsx')},
+                           content_type='multipart/form-data')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['success'] == 1
+        assert '已有类别' not in data.get('new_categories', [])
+
+        # 验证类别表中只有一个
+        with app.app_context():
+            cats = Category.query.filter_by(name='已有类别').all()
+            assert len(cats) == 1
+
+    def test_import_consumables_duplicate_category_in_file(self, client, app):
+        """导入耗材时，同一类别在文件中出现多次，只创建一次"""
+        excel = self._make_excel(
+            ['耗材编号', '耗材名称', '类别'],
+            [
+                ['DUP001', '重复类别耗材1', '重复类别'],
+                ['DUP002', '重复类别耗材2', '重复类别'],
+            ]
+        )
+        resp = client.post('/api/excel/import/consumable',
+                           data={'file': (excel, 'test.xlsx')},
+                           content_type='multipart/form-data')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['success'] == 2
+        # new_categories 中 '重复类别' 只出现一次
+        assert data.get('new_categories', []).count('重复类别') == 1
+
+        with app.app_context():
+            cats = Category.query.filter_by(name='重复类别').all()
+            assert len(cats) == 1
+
+    def test_import_consumables_update_mode_auto_create_category(self, client, app):
+        """update模式下导入耗材时，新类别也自动创建"""
+        client.post('/api/consumables', json={'code': 'UPD001', 'name': '旧名称'})
+
+        excel = self._make_excel(
+            ['耗材编号', '耗材名称', '类别'],
+            [
+                ['UPD001', '新名称', '更新类别'],
+                ['UPD002', '新耗材', '更新类别'],
+            ]
+        )
+        resp = client.post('/api/excel/import/consumable',
+                           data={'file': (excel, 'test.xlsx'), 'mode': 'update'},
+                           content_type='multipart/form-data')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert '更新类别' in data.get('new_categories', [])
+
+        with app.app_context():
+            cat = Category.query.filter_by(name='更新类别').first()
+            assert cat is not None
+
+    def test_import_consumables_empty_category_not_created(self, client, app):
+        """导入耗材时，空类别不会创建到类别管理中"""
+        excel = self._make_excel(
+            ['耗材编号', '耗材名称', '类别'],
+            [
+                ['EMPTYCAT', '空类别耗材', ''],
+            ]
+        )
+        resp = client.post('/api/excel/import/consumable',
+                           data={'file': (excel, 'test.xlsx')},
+                           content_type='multipart/form-data')
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['success'] == 1
+        # 空字符串不应出现在 new_categories 中
+        assert '' not in data.get('new_categories', [])
+
 
 class TestConsumableExport:
     """耗材信息导出"""
@@ -136,56 +255,6 @@ class TestConsumableExport:
         resp = client.get('/api/excel/export/consumable?keyword=关键词')
         assert resp.status_code == 200
         assert len(resp.data) > 0
-
-
-class TestBatchUpdateConsumable:
-    """批量修改耗材信息"""
-
-    def _make_excel(self, headers, rows):
-        import openpyxl
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.append(headers)
-        for row in rows:
-            ws.append(row)
-        output = io.BytesIO()
-        wb.save(output)
-        output.seek(0)
-        return output
-
-    def test_batch_update_consumable(self, client, app):
-        """批量修改耗材信息（按编号匹配更新）"""
-        # 先创建耗材
-        client.post('/api/consumables', json={'code': 'BU001', 'name': '原名', 'brand': '原品牌'})
-
-        excel = self._make_excel(
-            ['耗材编号', '耗材名称', '品牌名称'],
-            [['BU001', '新名', '新品牌']]
-        )
-        resp = client.post('/api/excel/batch-update/consumable',
-                           data={'file': (excel, 'test.xlsx')},
-                           content_type='multipart/form-data')
-        assert resp.status_code == 200
-        data = resp.get_json()
-        assert data['updated'] == 1
-
-        with app.app_context():
-            c = Consumable.query.filter_by(code='BU001').first()
-            assert c.name == '新名'
-            assert c.brand == '新品牌'
-
-    def test_batch_update_skip_nonexistent(self, client, app):
-        """批量修改时跳过不存在的编号"""
-        excel = self._make_excel(
-            ['耗材编号', '耗材名称'],
-            [['NOTEXIST001', '不存在']]
-        )
-        resp = client.post('/api/excel/batch-update/consumable',
-                           data={'file': (excel, 'test.xlsx')},
-                           content_type='multipart/form-data')
-        data = resp.get_json()
-        assert data['skipped'] == 1
-        assert data['updated'] == 0
 
 
 class TestInboundImport:

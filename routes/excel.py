@@ -2,7 +2,7 @@ import io
 import os
 from datetime import datetime, date
 from flask import Blueprint, request, jsonify, send_file
-from models import db, Consumable, StockBatch, InboundRecord, OutboundRecord
+from models import db, Consumable, StockBatch, InboundRecord, OutboundRecord, Category
 
 excel_bp = Blueprint('excel', __name__)
 
@@ -135,12 +135,31 @@ def import_consumables():
     existing_codes = set(c.code for c in Consumable.query.all())
     # 追踪文件内已处理的编号，防止文件内部编号重复
     seen_codes_in_file = set()
+    # 预加载所有已有类别名称，用于自动创建新类别
+    existing_category_names = set(cat.name for cat in Category.query.all())
+    # 追踪本次导入中已新建的类别名称，避免重复创建
+    created_category_names = set()
 
     def _safe_int(val, default=0):
         try:
             return int(float(val)) if val else default
         except (ValueError, TypeError):
             return default
+
+    # 查询当前类别最大排序值，新增类别排到最后
+    max_sort_order = db.session.query(db.func.max(Category.sort_order)).scalar() or 0
+
+    def _ensure_category(cat_name):
+        """确保类别存在，不存在则自动创建（排序值递增，排在最后）"""
+        nonlocal existing_category_names, created_category_names, max_sort_order
+        if not cat_name:
+            return
+        if cat_name in existing_category_names or cat_name in created_category_names:
+            return
+        max_sort_order += 1
+        cat = Category(name=cat_name, sort_order=max_sort_order)
+        db.session.add(cat)
+        created_category_names.add(cat_name)
 
     for i, row in df.iterrows():
         row_num = i + 2  # Excel行号（1-indexed + 头行）
@@ -172,6 +191,7 @@ def import_consumables():
                         val = str(row.get(col_idx['类别'], '')).strip()
                         if val:
                             existing.category = val
+                            _ensure_category(val)
                     if '品牌名称' in col_idx:
                         val = str(row.get(col_idx['品牌名称'], '')).strip()
                         if val:
@@ -227,6 +247,7 @@ def import_consumables():
                 c = Consumable(code=code, name=name)
                 if '类别' in col_idx:
                     c.category = str(row.get(col_idx['类别'], '')).strip()
+                    _ensure_category(c.category)
                 if '品牌名称' in col_idx:
                     c.brand = str(row.get(col_idx['品牌名称'], '')).strip()
                 if '生产厂家' in col_idx:
@@ -275,6 +296,7 @@ def import_consumables():
         'success': success,
         'skipped': skipped,
         'updated': updated,
+        'new_categories': list(created_category_names),
         'errors': errors[:20],
     })
 
