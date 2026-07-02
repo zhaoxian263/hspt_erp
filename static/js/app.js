@@ -428,7 +428,7 @@ const InboundPage = {
         const res = await fetch(API.inboundPrint(row.id));
         const data = await res.json();
         const html = `
-          <h2>入库单</h2>
+          <h2>护理部耗材入库单</h2>
           <div class="print-info"><span>入库单号：${escapeHtml(data.document_number) || '-'}</span><span>入库时间：${escapeHtml(data.inbound_time) || '-'}</span></div>
           <div class="print-info"><span>经办人：${escapeHtml(data.operator) || '-'}</span><span>存放位置：${escapeHtml(data.storage_location) || '-'}</span></div>
           <div style="clear:both"></div>
@@ -443,7 +443,7 @@ const InboundPage = {
             </tr>
           </table>
           <div class="print-footer"><span>经办人签字：__________</span><span>验收人签字：__________</span><span>日期：__________</span></div>`;
-        printDocument('入库单 - ' + (data.document_number || ''), html);
+        printDocument('护理部耗材入库单 - ' + (data.document_number || ''), html);
       } catch(e) { ElMessage.error('获取打印数据失败'); }
     },
   },
@@ -635,7 +635,7 @@ const OutboundPage = {
             <td>${item.quantity}</td><td>${escapeHtml(item.remark) || ''}</td>
           </tr>`).join('');
         const html = `
-          <h2>出库单</h2>
+          <h2>护理部耗材出库单</h2>
           <div class="print-info"><span>出库单号：${escapeHtml(row.document_number) || '-'}</span><span>出库时间：${escapeHtml(row.outbound_time) || '-'}</span></div>
           <div class="print-info"><span>领用科室：${escapeHtml(row.department) || '-'}</span><span>领用人：${escapeHtml(row.recipient) || '-'}</span></div>
           <div class="print-info"><span>经办人：${escapeHtml(row.operator) || '-'}</span></div>
@@ -645,7 +645,7 @@ const OutboundPage = {
             ${rows}
           </table>
           <div class="print-footer"><span>领用人签字：__________</span><span>经办人签字：__________</span><span>日期：__________</span></div>`;
-        printDocument('出库单 - ' + (row.document_number || ''), html);
+        printDocument('护理部耗材出库单 - ' + (row.document_number || ''), html);
       } catch(e) { ElMessage.error('获取打印数据失败'); }
     },
   },
