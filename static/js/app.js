@@ -674,6 +674,7 @@ const OutboundPage = {
             <span v-text="formatBatchNumbers(row.batch_number, row.batch_detail)"></span>
           </template>
         </el-table-column>
+        <el-table-column prop="storage_location" label="存放位置" min-width="160" show-overflow-tooltip />
         <el-table-column prop="quantity" label="出库数量" width="75" />
         <el-table-column prop="recipient" label="领用人" width="70" />
         <el-table-column prop="department" label="领用科室" width="90" />

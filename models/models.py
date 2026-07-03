@@ -309,6 +309,27 @@ class OutboundRecord(db.Model):
             'outbound_time': self.outbound_time.strftime('%Y-%m-%d %H:%M:%S') if self.outbound_time else None,
             'remark': self.remark,
         }
+        # 存放位置：展示耗材位置 + 各批次位置
+        parts = []
+        if self.consumable_id:
+            # 耗材本身的位置
+            if self.consumable and self.consumable.storage_location:
+                parts.append(f'耗材位置：{self.consumable.storage_location}')
+            # 各批号对应批次的位置
+            detail = json.loads(self.batch_detail) if self.batch_detail else None
+            batch_numbers = []
+            if detail and isinstance(detail, list):
+                batch_numbers = [d.get('batch_number', '') for d in detail if d.get('batch_number')]
+            elif self.batch_number:
+                batch_numbers = [self.batch_number]
+            for bn in batch_numbers:
+                batch = StockBatch.query.filter_by(
+                    consumable_id=self.consumable_id,
+                    batch_number=bn,
+                ).first()
+                loc = batch.storage_location if batch else ''
+                parts.append(f'{bn}：{loc or "-"}')
+        data['storage_location'] = '；'.join(parts) if parts else ''
         if include_consumable and self.consumable:
             data['consumable_name'] = self.consumable.name
             data['consumable_code'] = self.consumable.code
