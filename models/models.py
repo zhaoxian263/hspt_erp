@@ -145,23 +145,12 @@ class Consumable(db.Model):
             'unit': self.unit,
             'category': self.category,
             'storage_location': self.storage_location,
-            'initial_stock': self.initial_stock,
             'stock_warning_value': self.stock_warning_value,
             'expiry_warning_days': self.expiry_warning_days,
             'remark': self.remark,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,
         }
-        # 附带期初库存批次的生产日期和失效日期，用于编辑表单回显
-        init_batch = StockBatch.query.filter_by(
-            consumable_id=self.id, batch_number='期初库存'
-        ).first()
-        if init_batch:
-            data['initial_production_date'] = init_batch.production_date.strftime('%Y-%m-%d') if init_batch.production_date else None
-            data['initial_expiry_date'] = init_batch.expiry_date.strftime('%Y-%m-%d') if init_batch.expiry_date else None
-        else:
-            data['initial_production_date'] = None
-            data['initial_expiry_date'] = None
         if include_stock:
             data.update({
                 'total_inbound': self.total_inbound,
@@ -256,6 +245,7 @@ class InboundRecord(db.Model):
     storage_location = db.Column(db.String(200), nullable=True, comment='存放位置')
     inbound_time = db.Column(db.DateTime, default=datetime.now, comment='入库时间')
     remark = db.Column(db.Text, nullable=True, comment='备注')
+    created_at = db.Column(db.DateTime, default=datetime.now, comment='创建时间')
 
     def to_dict(self, include_consumable=False):
         data = {
@@ -270,6 +260,7 @@ class InboundRecord(db.Model):
             'storage_location': self.storage_location,
             'inbound_time': self.inbound_time.strftime('%Y-%m-%d %H:%M:%S') if self.inbound_time else None,
             'remark': self.remark,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }
         if include_consumable and self.consumable:
             data['consumable_name'] = self.consumable.name
@@ -294,6 +285,7 @@ class OutboundRecord(db.Model):
     operator = db.Column(db.String(100), nullable=True, comment='经办人')
     outbound_time = db.Column(db.DateTime, default=datetime.now, comment='出库时间')
     remark = db.Column(db.Text, nullable=True, comment='备注')
+    created_at = db.Column(db.DateTime, default=datetime.now, comment='创建时间')
 
     def to_dict(self, include_consumable=False):
         data = {
@@ -308,6 +300,7 @@ class OutboundRecord(db.Model):
             'operator': self.operator,
             'outbound_time': self.outbound_time.strftime('%Y-%m-%d %H:%M:%S') if self.outbound_time else None,
             'remark': self.remark,
+            'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
         }
         # 存放位置：展示耗材位置 + 各批次位置
         parts = []

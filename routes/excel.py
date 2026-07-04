@@ -17,12 +17,12 @@ def download_consumable_template():
     ws = wb.active
     ws.title = '基础信息'
     headers = ['耗材编号', '耗材名称', '类别', '品牌名称', '生产厂家', '规格型号', '单位',
-               '存放位置', '期初库存', '期初生产日期', '期初失效日期', '库存预警值', '近效期预警天数', '备注']
+               '存放位置', '库存预警值', '近效期预警天数', '备注']
     ws.append(headers)
 
     # 示例数据
-    ws.append(['HC2027070101', '医用外科口罩', '防护用品', '海马医森', '宏冠医疗', '无菌型挂耳式', '个', 'A区1号架', 0, '', '', 100, 60, ''])
-    ws.append(['HC2027070102', '密闭式静脉留置针', '注射穿刺类', '競玛', '碧迪医疗', '22G×1.00IN', '支', 'B区2号架', 0, '', '', 50, 90, ''])
+    ws.append(['HC2027070101', '医用外科口罩', '防护用品', '海马医森', '宏冠医疗', '无菌型挂耳式', '个', 'A区1号架', 100, 60, ''])
+    ws.append(['HC2027070102', '密闭式静脉留置针', '注射穿刺类', '競玛', '碧迪医疗', '22G×1.00IN', '支', 'B区2号架', 50, 90, ''])
 
     output = io.BytesIO()
     wb.save(output)
@@ -105,9 +105,6 @@ def import_consumables():
         '规格型号': ['规格型号', '规格', 'specification'],
         '单位': ['单位', 'unit'],
         '存放位置': ['存放位置', '位置', 'storage_location'],
-        '期初库存': ['期初库存', '初始库存', 'initial_stock'],
-        '期初生产日期': ['期初生产日期', 'initial_production_date'],
-        '期初失效日期': ['期初失效日期', 'initial_expiry_date'],
         '库存预警值': ['库存预警值', '预警值', 'stock_warning_value'],
         '近效期预警天数': ['近效期预警天数', '效期预警天数', '预警时间（天）', 'expiry_warning_days'],
         '备注': ['备注', 'remark'],
@@ -124,9 +121,6 @@ def import_consumables():
 
     if '耗材编号' not in col_idx or '耗材名称' not in col_idx:
         return jsonify({'error': 'Excel缺少必填列：耗材编号、耗材名称'}), 400
-
-    # 日期解析工具
-    from routes.stock import _parse_date
 
     success = 0
     skipped = 0
@@ -214,22 +208,6 @@ def import_consumables():
                         val = str(row.get(col_idx['存放位置'], '')).strip()
                         if val:
                             existing.storage_location = val
-                    if '期初库存' in col_idx:
-                        val = row.get(col_idx['期初库存'], '')
-                        if val:
-                            existing.initial_stock = _safe_int(val, 0)
-                    # 期初生产日期/失效日期：同步到期初库存批次
-                    init_prod_date = _parse_date(row.get(col_idx.get('期初生产日期'))) if '期初生产日期' in col_idx else None
-                    init_exp_date = _parse_date(row.get(col_idx.get('期初失效日期'))) if '期初失效日期' in col_idx else None
-                    if init_prod_date or init_exp_date:
-                        init_batch = StockBatch.query.filter_by(
-                            consumable_id=existing.id, batch_number='期初库存'
-                        ).first()
-                        if init_batch:
-                            if init_prod_date:
-                                init_batch.production_date = init_prod_date
-                            if init_exp_date:
-                                init_batch.expiry_date = init_exp_date
                     if '库存预警值' in col_idx:
                         val = row.get(col_idx['库存预警值'], '')
                         if val:
@@ -260,8 +238,6 @@ def import_consumables():
                     c.unit = str(row.get(col_idx['单位'], '')).strip()
                 if '存放位置' in col_idx:
                     c.storage_location = str(row.get(col_idx['存放位置'], '')).strip()
-                if '期初库存' in col_idx:
-                    c.initial_stock = _safe_int(row.get(col_idx['期初库存'], '0'), 0)
                 if '库存预警值' in col_idx:
                     c.stock_warning_value = _safe_int(row.get(col_idx['库存预警值'], '0'), 0)
                 if '近效期预警天数' in col_idx:
@@ -269,21 +245,6 @@ def import_consumables():
                 if '备注' in col_idx:
                     c.remark = str(row.get(col_idx['备注'], '')).strip()
                 db.session.add(c)
-                db.session.flush()  # 先 flush 以获取 c.id
-                # 期初库存 > 0 时创建期初库存批次
-                if c.initial_stock and c.initial_stock > 0:
-                    init_prod_date = _parse_date(row.get(col_idx.get('期初生产日期'))) if '期初生产日期' in col_idx else None
-                    init_exp_date = _parse_date(row.get(col_idx.get('期初失效日期'))) if '期初失效日期' in col_idx else None
-                    batch = StockBatch(
-                        consumable_id=c.id,
-                        batch_number='期初库存',
-                        quantity=c.initial_stock,
-                        production_date=init_prod_date,
-                        expiry_date=init_exp_date,
-                        storage_location=c.storage_location,
-                        remark='系统自动创建（期初库存）',
-                    )
-                    db.session.add(batch)
                 success += 1
         except Exception as e:
             errors.append(f'第{row_num}行: {str(e)}')
@@ -323,19 +284,11 @@ def export_consumables():
     ws1 = wb.active
     ws1.title = '基础信息'
     headers1 = ['序号', '耗材编号', '耗材名称', '类别', '品牌名称', '生产厂家', '规格型号',
-                '单位', '存放位置', '期初库存', '期初生产日期', '期初失效日期',
-                '库存预警值', '近效期预警天数', '备注']
+                '单位', '存放位置', '库存预警值', '近效期预警天数', '备注']
     ws1.append(headers1)
     for idx, c in enumerate(items, 1):
-        # 查询期初库存批次的生产日期和失效日期
-        init_batch = StockBatch.query.filter_by(
-            consumable_id=c.id, batch_number='期初库存'
-        ).first()
-        init_prod = init_batch.production_date.strftime('%Y-%m-%d') if init_batch and init_batch.production_date else ''
-        init_exp = init_batch.expiry_date.strftime('%Y-%m-%d') if init_batch and init_batch.expiry_date else ''
         ws1.append([idx, c.code, c.name, c.category, c.brand, c.manufacturer, c.specification,
-                    c.unit, c.storage_location, c.initial_stock or 0,
-                    init_prod, init_exp,
+                    c.unit, c.storage_location,
                     c.stock_warning_value, c.expiry_warning_days, c.remark])
 
     output = io.BytesIO()

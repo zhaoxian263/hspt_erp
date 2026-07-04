@@ -668,58 +668,30 @@ def period_inventory():
     consumables = query.order_by(Consumable.code).all()
     result = []
     for c in consumables:
-        base_initial = c.initial_stock or 0
-        # 根据期初库存批次的创建时间，判断 initial_stock 归属期初还是期间入库
-        init_batch = StockBatch.query.filter_by(
-            consumable_id=c.id, batch_number='期初库存'
-        ).first()
-        init_for_period_start = 0   # 归入期初的初始库存
-        init_for_period_inbound = 0  # 归入期间入库的初始库存
-        if init_batch and base_initial > 0:
-            batch_created = init_batch.created_at
-            if batch_created:
-                batch_created_str = batch_created.strftime('%Y-%m-%d')
-                if batch_created_str < start_date:
-                    # 批次创建在期间开始之前，初始库存归入期初
-                    init_for_period_start = base_initial
-                elif batch_created_str <= end_date:
-                    # 批次创建在期间内，初始库存归入期间入库
-                    init_for_period_inbound = base_initial
-                # else: 批次创建在期间之后，初始库存不计入本期间
-            else:
-                # 没有 created_at，回退到旧逻辑（全部归入期初）
-                init_for_period_start = base_initial
-        elif base_initial > 0:
-            # 没有期初库存批次但有 initial_stock（兼容旧数据），回退到旧逻辑
-            init_for_period_start = base_initial
-
-        # 期初前入库（开始日期之前的入库总量）
+        # 期初 = 开始日期之前所有入库 - 开始日期之前所有出库（不低于0）
         pre_inbound = db.session.query(db.func.coalesce(db.func.sum(InboundRecord.quantity), 0)) \
             .filter(InboundRecord.consumable_id == c.id,
                     InboundRecord.inbound_time < start_date) \
             .scalar() or 0
-        # 期初前出库（开始日期之前的出库总量）
         pre_outbound = db.session.query(db.func.coalesce(db.func.sum(OutboundRecord.quantity), 0)) \
             .filter(OutboundRecord.consumable_id == c.id,
                     OutboundRecord.outbound_time < start_date) \
             .scalar() or 0
-        # 期初 = 归入期初的initial_stock + 期初前入库 - 期初前出库
-        initial = init_for_period_start + int(pre_inbound) - int(pre_outbound)
-        # 期间入库 = 入库记录 + 归入期间入库的initial_stock
+        initial = max(0, int(pre_inbound) - int(pre_outbound))
+        # 期间入库
         inbound_qty = db.session.query(db.func.coalesce(db.func.sum(InboundRecord.quantity), 0)) \
             .filter(InboundRecord.consumable_id == c.id,
                     InboundRecord.inbound_time >= start_date,
                     InboundRecord.inbound_time <= end_date + ' 23:59:59.999999') \
             .scalar() or 0
-        inbound_qty = int(inbound_qty) + init_for_period_inbound
         # 期间出库
         outbound_qty = db.session.query(db.func.coalesce(db.func.sum(OutboundRecord.quantity), 0)) \
             .filter(OutboundRecord.consumable_id == c.id,
                     OutboundRecord.outbound_time >= start_date,
                     OutboundRecord.outbound_time <= end_date + ' 23:59:59.999999') \
             .scalar() or 0
-        # 期末 = 期初 + 期间入库 - 期间出库
-        ending = initial + inbound_qty - int(outbound_qty)
+        # 期末 = 期初 + 期间入库 - 期间出库（不低于0）
+        ending = max(0, initial + int(inbound_qty) - int(outbound_qty))
 
         result.append({
             'id': c.id,

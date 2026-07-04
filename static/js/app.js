@@ -87,17 +87,11 @@ async function loadCategoryOptions() {
   } catch (e) { console.error('加载类别列表失败', e); }
 }
 
-// HTML 转义，防止 XSS
-function escapeHtml(str) {
-  if (str == null) return '';
-  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-}
-
 // 打印单据（打开新窗口打印）
 function printDocument(title, htmlContent) {
   const win = window.open('', '_blank');
   if (!win) { ElMessage.error('请允许弹出窗口以打印'); return; }
-  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escapeHtml(title)}</title>
+  win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${title}</title>
     <style>
       body { font-family: 'Microsoft YaHei', sans-serif; padding: 30px; color: #333; }
       h2 { text-align: center; margin-bottom: 20px; }
@@ -255,7 +249,7 @@ const ConsumablePage = {
     onPageChange(p) { this.page = p; this.loadData(); },
     openAdd() {
       this.isEdit = false; this.dialogTitle = '新增耗材';
-      this.form = { code:'', name:'', brand:'', manufacturer:'', specification:'', unit:'', category:'', storage_location:'', initial_stock:0, initial_production_date:'', initial_expiry_date:'', stock_warning_value:0, expiry_warning_days:0, remark:'' };
+      this.form = { code:'', name:'', brand:'', manufacturer:'', specification:'', unit:'', category:'', storage_location:'', stock_warning_value:0, expiry_warning_days:0, remark:'' };
       this.categoryOptions = categoryOptions;
       this.dialogVisible = true;
     },
@@ -358,17 +352,8 @@ const ConsumablePage = {
           </el-row>
           <el-divider content-position="left">库存设置</el-divider>
           <el-row :gutter="16">
-            <el-col :span="8"><el-form-item label="期初库存"><el-input-number v-model="form.initial_stock" :min="0" :step="1" style="width:100%" /></el-form-item></el-col>
             <el-col :span="8"><el-form-item label="库存预警值"><el-input-number v-model="form.stock_warning_value" :min="0" style="width:100%" /></el-form-item></el-col>
             <el-col :span="8"><el-form-item label="效期预警天数"><el-input-number v-model="form.expiry_warning_days" :min="0" style="width:100%" /></el-form-item></el-col>
-          </el-row>
-          <el-row :gutter="16" v-if="form.initial_stock > 0">
-            <el-col :span="12"><el-form-item label="生产日期"><el-date-picker v-model="form.initial_production_date" type="date" value-format="YYYY-MM-DD" placeholder="期初库存生产日期" style="width:100%" /></el-form-item></el-col>
-            <el-col :span="12"><el-form-item label="失效日期"><el-date-picker v-model="form.initial_expiry_date" type="date" value-format="YYYY-MM-DD" placeholder="期初库存失效日期" style="width:100%" /></el-form-item></el-col>
-          </el-row>
-          <el-row :gutter="16" v-if="isEdit">
-            <el-col :span="12"><el-form-item label="创建时间"><el-input :model-value="form.created_at" disabled /></el-form-item></el-col>
-            <el-col :span="12"><el-form-item label="修改时间"><el-input :model-value="form.updated_at" disabled /></el-form-item></el-col>
           </el-row>
           <el-divider content-position="left">其他</el-divider>
           <el-form-item label="备注"><el-input v-model="form.remark" type="textarea" :rows="2" placeholder="选填" /></el-form-item>
@@ -428,22 +413,22 @@ const InboundPage = {
         const res = await fetch(API.inboundPrint(row.id));
         const data = await res.json();
         const html = `
-          <h2>护理部耗材入库单</h2>
-          <div class="print-info"><span>入库单号：${escapeHtml(data.document_number) || '-'}</span><span>入库时间：${escapeHtml(data.inbound_time) || '-'}</span></div>
-          <div class="print-info"><span>经办人：${escapeHtml(data.operator) || '-'}</span><span>存放位置：${escapeHtml(data.storage_location) || '-'}</span></div>
+          <h2>入库单</h2>
+          <div class="print-info"><span>入库单号：${data.document_number || '-'}</span><span>入库时间：${data.inbound_time || '-'}</span></div>
+          <div class="print-info"><span>经办人：${data.operator || '-'}</span><span>存放位置：${data.storage_location || '-'}</span></div>
           <div style="clear:both"></div>
           <table>
             <tr><th>耗材编号</th><th>耗材名称</th><th>规格型号</th><th>品牌</th><th>单位</th><th>批号</th><th>生产日期</th><th>失效日期</th><th>数量</th><th>备注</th></tr>
             <tr>
-              <td>${escapeHtml(data.consumable_code) || ''}</td><td>${escapeHtml(data.consumable_name) || ''}</td>
-              <td>${escapeHtml(data.consumable_spec) || ''}</td><td>${escapeHtml(data.consumable_brand) || ''}</td>
-              <td>${escapeHtml(data.consumable_unit) || ''}</td><td>${escapeHtml(data.batch_number) || ''}</td>
-              <td>${escapeHtml(data.production_date) || ''}</td><td>${escapeHtml(data.expiry_date) || ''}</td>
-              <td>${data.quantity}</td><td>${escapeHtml(data.remark) || ''}</td>
+              <td>${data.consumable_code || ''}</td><td>${data.consumable_name || ''}</td>
+              <td>${data.consumable_spec || ''}</td><td>${data.consumable_brand || ''}</td>
+              <td>${data.consumable_unit || ''}</td><td>${data.batch_number || ''}</td>
+              <td>${data.production_date || ''}</td><td>${data.expiry_date || ''}</td>
+              <td>${data.quantity}</td><td>${data.remark || ''}</td>
             </tr>
           </table>
           <div class="print-footer"><span>经办人签字：__________</span><span>验收人签字：__________</span><span>日期：__________</span></div>`;
-        printDocument('护理部耗材入库单 - ' + (data.document_number || ''), html);
+        printDocument('入库单 - ' + (data.document_number || ''), html);
       } catch(e) { ElMessage.error('获取打印数据失败'); }
     },
   },
@@ -475,6 +460,7 @@ const InboundPage = {
         <el-table-column prop="operator" label="经办人" width="70" />
         <el-table-column prop="inbound_time" label="入库时间" width="150" />
         <el-table-column prop="remark" label="备注" min-width="120" show-overflow-tooltip />
+        <el-table-column prop="created_at" label="创建时间" width="160" />
         <el-table-column label="操作" width="110" fixed="right">
           <template #default="{row}">
             <el-button link type="primary" size="small" @click="printRecord(row)">打印</el-button>
@@ -602,23 +588,23 @@ const OutboundPage = {
     },
     formatBatchNumbers(bn, detail) {
       if (!bn) return '';
-      // 优先使用 batch_detail 展示每个批号及扣减数量（使用安全文本渲染）
+      // 优先使用 batch_detail 展示每个批号及扣减数量
       if (detail && Array.isArray(detail) && detail.length > 0) {
-        return detail.map(d => d.batch_number + '(' + d.quantity + ')').join(', ');
+        return detail.map(d => `<div style="line-height:1.6">${d.batch_number}(${d.quantity})</div>`).join('');
       }
       // 兼容旧数据：仅逗号分隔批号
       const parts = bn.split(',').filter(s => s.trim());
       if (parts.length <= 1) return bn;
-      return parts.join(', ');
+      return parts.map(b => `<div style="line-height:1.6">${b}</div>`).join('');
     },
     formatBatchNumberForPrint(item) {
-      // 打印模板中批号展示（纯文本，换行用逗号分隔）
+      // 打印模板中批号展示（纯文本，用<br/>换行）
       const detail = item.batch_detail;
       const bn = item.batch_number || '';
       if (detail && Array.isArray(detail) && detail.length > 0) {
-        return detail.map(d => escapeHtml(d.batch_number) + '(' + d.quantity + ')').join(', ');
+        return detail.map(d => `${d.batch_number}(${d.quantity})`).join('<br/>');
       }
-      return escapeHtml(bn);
+      return bn.replace(/,/g, '<br/>');
     },
     gotoExcel() { this.$router.push('/excel'); },
     async printRecord(row) {
@@ -629,23 +615,23 @@ const OutboundPage = {
         const items = data.items || [];
         const rows = items.map(item => `
           <tr>
-            <td>${escapeHtml(item.consumable_code) || ''}</td><td>${escapeHtml(item.consumable_name) || ''}</td>
-            <td>${escapeHtml(item.consumable_spec) || ''}</td><td>${escapeHtml(item.consumable_brand) || ''}</td>
-            <td>${escapeHtml(item.consumable_unit) || ''}</td><td>${this.formatBatchNumberForPrint(item)}</td>
-            <td>${item.quantity}</td><td>${escapeHtml(item.remark) || ''}</td>
+            <td>${item.consumable_code || ''}</td><td>${item.consumable_name || ''}</td>
+            <td>${item.consumable_spec || ''}</td><td>${item.consumable_brand || ''}</td>
+            <td>${item.consumable_unit || ''}</td><td>${this.formatBatchNumberForPrint(item)}</td>
+            <td>${item.quantity}</td><td>${item.remark || ''}</td>
           </tr>`).join('');
         const html = `
-          <h2>护理部耗材出库单</h2>
-          <div class="print-info"><span>出库单号：${escapeHtml(row.document_number) || '-'}</span><span>出库时间：${escapeHtml(row.outbound_time) || '-'}</span></div>
-          <div class="print-info"><span>领用科室：${escapeHtml(row.department) || '-'}</span><span>领用人：${escapeHtml(row.recipient) || '-'}</span></div>
-          <div class="print-info"><span>经办人：${escapeHtml(row.operator) || '-'}</span></div>
+          <h2>出库单</h2>
+          <div class="print-info"><span>出库单号：${row.document_number || '-'}</span><span>出库时间：${row.outbound_time || '-'}</span></div>
+          <div class="print-info"><span>领用科室：${row.department || '-'}</span><span>领用人：${row.recipient || '-'}</span></div>
+          <div class="print-info"><span>经办人：${row.operator || '-'}</span></div>
           <div style="clear:both"></div>
           <table>
             <tr><th>耗材编号</th><th>耗材名称</th><th>规格型号</th><th>品牌</th><th>单位</th><th>批号</th><th>数量</th><th>备注</th></tr>
             ${rows}
           </table>
           <div class="print-footer"><span>领用人签字：__________</span><span>经办人签字：__________</span><span>日期：__________</span></div>`;
-        printDocument('护理部耗材出库单 - ' + (row.document_number || ''), html);
+        printDocument('出库单 - ' + (row.document_number || ''), html);
       } catch(e) { ElMessage.error('获取打印数据失败'); }
     },
   },
@@ -669,17 +655,22 @@ const OutboundPage = {
         <el-table-column prop="consumable_code" label="耗材编号" width="120" />
         <el-table-column prop="consumable_name" label="耗材名称" min-width="130" />
         <el-table-column prop="consumable_spec" label="规格型号" width="110" />
-        <el-table-column label="批号" width="150">
+        <el-table-column label="批号" min-width="150">
           <template #default="{row}">
-            <span v-text="formatBatchNumbers(row.batch_number, row.batch_detail)"></span>
+            <span v-html="formatBatchNumbers(row.batch_number, row.batch_detail).split(',').join('<br/>')"></span>
           </template>
         </el-table-column>
-        <el-table-column prop="storage_location" label="存放位置" min-width="160" show-overflow-tooltip />
+        <el-table-column prop="storage_location" label="存放位置" min-width="160">
+          <template #default="{row}">
+            <span v-html="(row.storage_location || '-').split('\uff1b').join('<br/>')"></span>
+          </template>
+        </el-table-column>
         <el-table-column prop="quantity" label="出库数量" width="75" />
         <el-table-column prop="recipient" label="领用人" width="70" />
         <el-table-column prop="department" label="领用科室" width="90" />
         <el-table-column prop="operator" label="经办人" width="70" />
         <el-table-column prop="outbound_time" label="出库时间" width="150" />
+        <el-table-column prop="created_at" label="创建时间" width="160" />
         <el-table-column prop="remark" label="备注" min-width="120" show-overflow-tooltip />
         <el-table-column label="操作" width="110" fixed="right">
           <template #default="{row}">

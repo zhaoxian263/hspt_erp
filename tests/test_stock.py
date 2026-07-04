@@ -336,15 +336,17 @@ class TestPeriodInventory:
 
     def test_period_inventory_calculation(self, client, app):
         """期间库存计算：期初 + 入库 - 出库 = 期末
-        初始库存批次创建在期间之前，归入期初"""
-        c = create_consumable(client, code='HC-PI', name='期间库存', initial_stock=100)
+        期初前的入库记录归入期初"""
+        c = create_consumable(client, code='HC-PI', name='期间库存')
         cid = c['id']
-        # 将期初库存批次创建时间设到期间之前，同时用ORM插入历史入库/出库记录
+        # 用ORM插入期初前的入库记录和期间内的入库/出库记录
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2026, 1, 1, 10, 0, 0)
+            # 1月入库100（期初前）
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=100, batch_number='LOT-INIT',
+                inbound_time=datetime(2026, 1, 1, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=100))
             # 6月期间内的入库和出库
             _db.session.add(InboundRecord(
                 consumable_id=cid, quantity=50, batch_number='LOT001',
@@ -361,7 +363,7 @@ class TestPeriodInventory:
         assert resp.status_code == 200
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
-        # 期初=100(initial，批次在1月创建，在6月之前), 入库50, 出库30
+        # 期初=100(1月入库，在6月之前), 入库50, 出库30
         assert item['initial_stock'] == 100
         assert item['period_inbound'] == 50
         assert item['period_outbound'] == 30
@@ -384,16 +386,18 @@ class TestPeriodInventory:
         assert data['total'] >= 1
 
     def test_period_inventory_no_transactions(self, client, app):
-        """期间库存：查询期内无出入库，初始库存批次在期间之前"""
-        c = create_consumable(client, code='HC-PNT', name='无交易耗材', initial_stock=50)
+        """期间库存：查询期内无出入库，期初前入库归入期初"""
+        c = create_consumable(client, code='HC-PNT', name='无交易耗材')
         cid = c['id']
 
-        # 将期初库存批次创建时间设到期间之前，并用ORM插入期初前的入库
+        # 用ORM插入期初前的入库记录
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2026, 1, 1, 10, 0, 0)
+            # 1月入库50（期初前）
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=50, batch_number='LOT-INIT',
+                inbound_time=datetime(2026, 1, 1, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=50))
             # 6月入库（7月之前，算期初前）
             _db.session.add(InboundRecord(
                 consumable_id=cid, quantity=20, batch_number='LOT-JUN',
@@ -402,11 +406,11 @@ class TestPeriodInventory:
                 consumable_id=cid, batch_number='LOT-JUN', quantity=20))
             _db.session.commit()
 
-        # 查询7月期间：期初前的入库(20)和初始库存(50)都算期初
+        # 查询7月期间：期初前的入库(50+20)都算期初
         resp = client.get('/api/stock/period-inventory?start_date=2026-07-01&end_date=2026-07-31')
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
-        # 期初 = 50(initial) + 20(6月入库) = 70, 期间无出入库
+        # 期初 = 50(1月入库) + 20(6月入库) = 70, 期间无出入库
         assert item['initial_stock'] == 70
         assert item['period_inbound'] == 0
         assert item['period_outbound'] == 0
@@ -414,7 +418,7 @@ class TestPeriodInventory:
 
     def test_period_inventory_zero_initial(self, client, app):
         """期间库存：期初为0"""
-        c = create_consumable(client, code='HC-PZI', name='零期初', initial_stock=0)
+        c = create_consumable(client, code='HC-PZI', name='零期初')
         cid = c['id']
         create_inbound(client, cid, quantity=30, batch_number='LOT001')
 
@@ -430,8 +434,16 @@ class TestPeriodInventory:
 
     def test_period_inventory_current_stock_consistency(self, client, app):
         """期间库存：期末应等于当前实际库存"""
-        c = create_consumable(client, code='HC-PCC', name='一致性验证', initial_stock=100)
+        c = create_consumable(client, code='HC-PCC', name='一致性验证')
         cid = c['id']
+        # 期初前入库100
+        with app.app_context():
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=100, batch_number='LOT-INIT',
+                inbound_time=datetime(2025, 1, 1, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=100))
+            _db.session.commit()
         create_inbound(client, cid, quantity=50, batch_number='LOT001')
         create_outbound(client, cid, quantity=30)
 
@@ -444,7 +456,7 @@ class TestPeriodInventory:
 
     def test_period_inventory_multiple_inbound_outbound(self, client, app):
         """期间库存：多次入库出库累计"""
-        c = create_consumable(client, code='HC-PMIO', name='多次交易', initial_stock=0)
+        c = create_consumable(client, code='HC-PMIO', name='多次交易')
         cid = c['id']
         create_inbound(client, cid, quantity=100, batch_number='LOT001')
         create_inbound(client, cid, quantity=50, batch_number='LOT002')
@@ -465,23 +477,26 @@ class TestPeriodInventoryCrossPeriod:
 
     def test_period_inventory_cross_period(self, client, app):
         """
-        跨期间场景：期初应该是期间开始前的累计库存，不是耗材的 initial_stock。
-        场景：耗材 initial_stock=100（批次1月创建），5月入库50、出库30，6月入库20、出库10。
+        跨期间场景：期初应该是期间开始前的累计库存。
+        场景：1月入库100，5月入库50、出库30，6月入库20、出库10。
         查6月期间：期初应为120(100+50-30)，期间入库20，期间出库10，期末130。
         """
-        c = create_consumable(client, code='HC-CP', name='跨期间耗材', initial_stock=100)
+        c = create_consumable(client, code='HC-CP', name='跨期间耗材')
         cid = c['id']
 
         with app.app_context():
-            # 将期初库存批次创建时间设到1月（期间之前）
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2026, 1, 1, 10, 0, 0)
+            # 1月入库100（期初前）
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=100, batch_number='LOT-INIT',
+                inbound_time=datetime(2026, 1, 1, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=100))
             # 5月份的入库和出库
             _db.session.add(InboundRecord(
                 consumable_id=cid, quantity=50, batch_number='LOT-MAY',
                 inbound_time=datetime(2026, 5, 10, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-MAY', quantity=50))
             _db.session.add(OutboundRecord(
                 consumable_id=cid, quantity=30,
                 outbound_time=datetime(2026, 5, 15, 10, 0, 0)))
@@ -489,6 +504,8 @@ class TestPeriodInventoryCrossPeriod:
             _db.session.add(InboundRecord(
                 consumable_id=cid, quantity=20, batch_number='LOT-JUN',
                 inbound_time=datetime(2026, 6, 5, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-JUN', quantity=20))
             _db.session.add(OutboundRecord(
                 consumable_id=cid, quantity=10,
                 outbound_time=datetime(2026, 6, 15, 10, 0, 0)))
@@ -499,7 +516,7 @@ class TestPeriodInventoryCrossPeriod:
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
 
-        # 期初 = 100(initial) + 50(5月入库) - 30(5月出库) = 120
+        # 期初 = 100(1月入库) + 50(5月入库) - 30(5月出库) = 120
         assert item['initial_stock'] == 120
         assert item['period_inbound'] == 20
         assert item['period_outbound'] == 10
@@ -508,18 +525,19 @@ class TestPeriodInventoryCrossPeriod:
     def test_period_inventory_cross_period_multiple_months(self, client, app):
         """
         跨多期间场景：3个月的出入库。
-        initial_stock=200（批次1月前创建），1月入库100出库50，2月入库80出库30，3月入库60出库40。
+        12月入库200，1月入库100出库50，2月入库80出库30，3月入库60出库40。
         查3月：期初=200+100-50+80-30=300，期间入库60，期间出库40，期末=320。
         """
-        c = create_consumable(client, code='HC-CPM', name='多期间耗材', initial_stock=200)
+        c = create_consumable(client, code='HC-CPM', name='多期间耗材')
         cid = c['id']
 
         with app.app_context():
-            # 将期初库存批次创建时间设到1月之前
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2025, 12, 1, 10, 0, 0)
+            # 12月入库200（期初前）
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=200, batch_number='LOT-INIT',
+                inbound_time=datetime(2025, 12, 1, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=200))
             records = [
                 InboundRecord(consumable_id=cid, quantity=100, batch_number='LOT-JAN',
                               inbound_time=datetime(2026, 1, 10, 10, 0, 0)),
@@ -541,7 +559,7 @@ class TestPeriodInventoryCrossPeriod:
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
 
-        # 期初 = 200 + 100 - 50 + 80 - 30 = 300
+        # 期初 = 200(12月入库) + 100 - 50 + 80 - 30 = 300
         assert item['initial_stock'] == 300
         assert item['period_inbound'] == 60
         assert item['period_outbound'] == 40
@@ -549,19 +567,20 @@ class TestPeriodInventoryCrossPeriod:
 
     def test_period_inventory_first_period(self, client, app):
         """
-        第一个期间查询：之前没有任何出入库记录，初始库存批次在期间之前创建。
-        initial_stock=50，期间内入库30出库10。
+        第一个期间查询：之前只有期初前的入库记录。
+        12月入库50，1月入库30出库10。
         期初=50，期间入库30，期间出库10，期末=70。
         """
-        c = create_consumable(client, code='HC-FP', name='首期间耗材', initial_stock=50)
+        c = create_consumable(client, code='HC-FP', name='首期间耗材')
         cid = c['id']
 
         with app.app_context():
-            # 将期初库存批次创建时间设到1月之前
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2025, 12, 1, 10, 0, 0)
+            # 12月入库50（期初前）
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=50, batch_number='LOT-INIT',
+                inbound_time=datetime(2025, 12, 1, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=50))
             records = [
                 InboundRecord(consumable_id=cid, quantity=30, batch_number='LOT-JAN',
                               inbound_time=datetime(2026, 1, 10, 10, 0, 0)),
@@ -605,7 +624,7 @@ class TestPeriodInventoryBoundary:
         inbound_time < '2026-06-01' 对比 '2026-06-01 00:00:00'，
         在SQLite字符串比较中 '2026-06-01 00:00:00' > '2026-06-01'，因此不算期初前。
         """
-        c = create_consumable(client, code='HC-BM', name='零点边界', initial_stock=0)
+        c = create_consumable(client, code='HC-BM', name='零点边界')
         cid = c['id']
 
         with app.app_context():
@@ -634,7 +653,7 @@ class TestPeriodInventoryBoundary:
         边界：end_date当天23:59:59的入库记录属于期间内。
         inbound_time <= '2026-06-30 23:59:59' 应包含 23:59:59 的记录。
         """
-        c = create_consumable(client, code='HC-BE', name='末秒边界', initial_stock=0)
+        c = create_consumable(client, code='HC-BE', name='末秒边界')
         cid = c['id']
 
         with app.app_context():
@@ -654,20 +673,20 @@ class TestPeriodInventoryBoundary:
 
     def test_period_no_records_at_all(self, client, app):
         """
-        边界：耗材没有任何出入库记录，只有initial_stock。
-        期初库存批次在期间之前创建 → 归入期初。
-        期初=initial_stock，期间入库=0，期间出库=0，期末=initial_stock。
+        边界：耗材只有期初前的入库记录，期间内无出入库。
+        期初前入库80，期间入库=0，期间出库=0，期末=80。
         """
-        c = create_consumable(client, code='HC-NR', name='无记录耗材', initial_stock=80)
+        c = create_consumable(client, code='HC-NR', name='无记录耗材')
         cid = c['id']
 
-        # 将期初库存批次创建时间设到期间之前
+        # 插入期初前的入库记录
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2025, 12, 1, 10, 0, 0)
-                _db.session.commit()
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=80, batch_number='LOT-INIT',
+                inbound_time=datetime(2025, 12, 1, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=80))
+            _db.session.commit()
 
         resp = client.get('/api/stock/period-inventory?start_date=2026-01-01&end_date=2026-12-31')
         data = resp.get_json()
@@ -680,10 +699,10 @@ class TestPeriodInventoryBoundary:
 
     def test_period_zero_initial_no_records(self, client, app):
         """
-        边界：initial_stock=0 且没有任何出入库记录。
+        边界：没有任何出入库记录。
         所有值均为0。
         """
-        c = create_consumable(client, code='HC-ZNR', name='零记录耗材', initial_stock=0)
+        c = create_consumable(client, code='HC-ZNR', name='零记录耗材')
         cid = c['id']
 
         resp = client.get('/api/stock/period-inventory?start_date=2026-01-01&end_date=2026-12-31')
@@ -699,10 +718,18 @@ class TestPeriodInventoryBoundary:
     def test_period_current_stock_equals_ending_for_today(self, client, app):
         """
         一致性：查询今天的期间时，期末库存应等于当前实时库存(current_stock)。
-        当初始库存批次在当天创建时，initial_stock 归入期间入库。
+        当天入库都归入期间入库。
         """
-        c = create_consumable(client, code='HC-CSE', name='当日期末一致', initial_stock=50)
+        c = create_consumable(client, code='HC-CSE', name='当日期末一致')
         cid = c['id']
+        # 当天入库50
+        with app.app_context():
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=50, batch_number='LOT-INIT',
+                inbound_time=datetime.now()))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=50))
+            _db.session.commit()
         create_inbound(client, cid, quantity=30, batch_number='LOT001')
         create_outbound(client, cid, quantity=20)
 
@@ -711,10 +738,10 @@ class TestPeriodInventoryBoundary:
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
 
-        # 当天创建的初始库存(50)归入期间入库，期初=0
+        # 当天入库(50)归入期间入库，期初=0
         # 期末 = 期初(0) + 期间入库(50+30) - 期间出库(20) = 60
         assert item['ending_stock'] == 60
-        # current_stock = 批次之和 = 期初批次(50) + 入库批次(30) - 出库(20) = 60
+        # current_stock = 批次之和 = 入库批次(50) + 入库批次(30) - 出库(20) = 60
         assert item['current_stock'] == 60
         assert item['ending_stock'] == item['current_stock']
 
@@ -725,16 +752,19 @@ class TestPeriodInventoryBoundary:
         ending_stock 是历史期末的公式计算值。
         当历史期后有新的入库时，current_stock > 5月期末。
         """
-        c = create_consumable(client, code='HC-CSD', name='历史期末不同', initial_stock=100)
+        c = create_consumable(client, code='HC-CSD', name='历史期末不同')
         cid = c['id']
 
-        # 5月入库50、出库20；6月入库30（全部通过ORM插入历史数据）
+        # 12月入库100、5月入库50、出库20；6月入库30（全部通过ORM插入历史数据）
         with app.app_context():
-            # 将期初库存批次创建时间设到1月之前
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2025, 12, 1, 10, 0, 0)
+            # 12月入库100（期初前）
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=100, batch_number='LOT-INIT',
+                inbound_time=datetime(2025, 12, 1, 10, 0, 0)
+            ))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=100
+            ))
             # 5月入库 + 批次
             may_inbound = InboundRecord(
                 consumable_id=cid, quantity=50, batch_number='LOT-MAY',
@@ -769,7 +799,7 @@ class TestPeriodInventoryBoundary:
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
 
-        # 5月期末 = 100(initial) + 50(5月入库) - 20(5月出库) = 130
+        # 5月期末 = 100(12月入库) + 50(5月入库) - 20(5月出库) = 130
         assert item['ending_stock'] == 130
         # current_stock = 批次之和 = 100(期初批次) + 30(5月批次扣减后) + 30(6月批次) = 160
         assert item['current_stock'] == 160
@@ -778,18 +808,19 @@ class TestPeriodInventoryBoundary:
 
     def test_period_formula_consistency_with_batch(self, client, app):
         """
-        一致性：期间公式 期末 = initial_stock + 全部入库 - 全部出库 应等于 current_stock。
-        当查询涵盖所有历史记录且初始库存批次在期间之前创建时，ending_stock 应等于 current_stock。
+        一致性：期间公式 期末 = 期初 + 期间入库 - 期间出库 应等于 current_stock。
+        当查询涵盖所有历史记录时，ending_stock 应等于 current_stock。
         """
-        c = create_consumable(client, code='HC-PFC', name='公式与批次一致', initial_stock=50)
+        c = create_consumable(client, code='HC-PFC', name='公式与批次一致')
         cid = c['id']
-        # 将期初库存批次创建时间设到很早
+        # 插入期初前的入库记录
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2019, 1, 1, 10, 0, 0)
-                _db.session.commit()
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=50, batch_number='LOT-INIT',
+                inbound_time=datetime(2019, 1, 1, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=50))
+            _db.session.commit()
         create_inbound(client, cid, quantity=80, batch_number='LOT001')
         create_inbound(client, cid, quantity=40, batch_number='LOT002')
         create_outbound(client, cid, quantity=60)
@@ -800,7 +831,7 @@ class TestPeriodInventoryBoundary:
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
 
-        # 期初 = 50(批次在2019年创建，在查询期间之前)
+        # 期初 = 50(2019年入库，在查询期间之前)
         # 期间入库 = 80 + 40 = 120
         # 期间出库 = 60 + 20 = 80
         # 期末 = 50 + 120 - 80 = 90
@@ -815,22 +846,28 @@ class TestPeriodInventoryBoundary:
     def test_period_only_outbound_no_inbound(self, client, app):
         """
         边界：只有出库没有入库的期间。
-        initial_stock=100（批次1月前创建），期初前入库100+出库30，期间出库20。
+        12月入库100，期初前入库100+出库30，期间出库20。
         期初=100+100-30=170，期间出库20，期末=150。
         """
-        c = create_consumable(client, code='HC-OON', name='仅出库期间', initial_stock=100)
+        c = create_consumable(client, code='HC-OON', name='仅出库期间')
         cid = c['id']
 
         with app.app_context():
-            # 将期初库存批次创建时间设到1月之前
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2025, 12, 1, 10, 0, 0)
-            # 先入库以保证有库存可出
+            # 12月入库100（期初前）
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=100, batch_number='LOT-INIT0',
+                inbound_time=datetime(2025, 12, 1, 10, 0, 0)
+            ))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT0', quantity=100
+            ))
+            # 1月入库以保证有库存可出
             _db.session.add(InboundRecord(
                 consumable_id=cid, quantity=100, batch_number='LOT-INIT',
                 inbound_time=datetime(2026, 1, 5, 10, 0, 0)
+            ))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=100
             ))
             # 5月出库
             _db.session.add(OutboundRecord(
@@ -848,7 +885,7 @@ class TestPeriodInventoryBoundary:
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
 
-        # 期初 = 100(initial) + 100(1月入库) - 30(5月出库) = 170
+        # 期初 = 100(12月入库) + 100(1月入库) - 30(5月出库) = 170
         # 期间出库 = 20
         # 期末 = 170 - 20 = 150
         assert item['initial_stock'] == 170
@@ -859,25 +896,34 @@ class TestPeriodInventoryBoundary:
     def test_period_only_inbound_no_outbound(self, client, app):
         """
         边界：只有入库没有出库的期间。
-        initial_stock=30（批次1月前创建），期初前入库20，期间入库50。
+        12月入库30，期初前入库20，期间入库50。
         期初=30+20=50，期间入库50，期末=100。
         """
-        c = create_consumable(client, code='HC-ION', name='仅入库期间', initial_stock=30)
+        c = create_consumable(client, code='HC-ION', name='仅入库期间')
         cid = c['id']
 
         with app.app_context():
-            # 将期初库存批次创建时间设到1月之前
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2025, 12, 1, 10, 0, 0)
+            # 12月入库30（期初前）
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=30, batch_number='LOT-INIT',
+                inbound_time=datetime(2025, 12, 1, 10, 0, 0)
+            ))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=30
+            ))
             _db.session.add(InboundRecord(
                 consumable_id=cid, quantity=20, batch_number='LOT-MAY',
                 inbound_time=datetime(2026, 5, 10, 10, 0, 0)
             ))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-MAY', quantity=20
+            ))
             _db.session.add(InboundRecord(
                 consumable_id=cid, quantity=50, batch_number='LOT-JUN',
                 inbound_time=datetime(2026, 6, 10, 10, 0, 0)
+            ))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-JUN', quantity=50
             ))
             _db.session.commit()
 
@@ -885,7 +931,7 @@ class TestPeriodInventoryBoundary:
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
 
-        # 期初 = 30 + 20(5月入库) = 50
+        # 期初 = 30(12月入库) + 20(5月入库) = 50
         # 期间入库 = 50
         # 期末 = 100
         assert item['initial_stock'] == 50
@@ -898,7 +944,7 @@ class TestPeriodInventoryBoundary:
         删除入库记录后期间库存公式重新计算。
         创建入库后删除，期间查询的入库量应减少。
         """
-        c = create_consumable(client, code='HC-DIA', name='删入库后期间', initial_stock=0)
+        c = create_consumable(client, code='HC-DIA', name='删入库后期间')
         cid = c['id']
 
         r = create_inbound(client, cid, quantity=100, batch_number='LOT001')
@@ -925,25 +971,26 @@ class TestPeriodInventoryBoundary:
         # 但注意：删除入库会同时扣减批次库存，如果出库记录引用的批次也被删除，
         # 那么出库可能不再有效。这里出库记录仍存在，所以 period_outbound 仍为 30
         assert item_after['period_inbound'] == 0
-        # 期初=0, 期间入库=0, 期间出库=30, 期末=-30
-        # 这说明删除入库后出库记录仍被计算，可能导致负数
+        # 期初=0, 期间入库=0, 期间出库=30, 期末=max(0, -30)=0
+        # 删除入库后出库记录仍被计算，负数截断为0
         assert item_after['period_outbound'] == 30
-        assert item_after['ending_stock'] == -30
+        assert item_after['ending_stock'] == 0
 
     def test_period_inventory_delete_outbound_affects_formula(self, client, app):
         """
         删除出库记录后期间库存公式重新计算。
         """
-        c = create_consumable(client, code='HC-DOA', name='删出库后期间', initial_stock=50)
+        c = create_consumable(client, code='HC-DOA', name='删出库后期间')
         cid = c['id']
 
-        # 将期初库存批次创建时间设到很早，确保归入期初
+        # 插入期初前的入库记录，确保归入期初
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2019, 1, 1, 10, 0, 0)
-                _db.session.commit()
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=50, batch_number='LOT-INIT',
+                inbound_time=datetime(2019, 1, 1, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=50))
+            _db.session.commit()
 
         create_inbound(client, cid, quantity=50, batch_number='LOT001')
         r = create_outbound(client, cid, quantity=30)
@@ -972,7 +1019,7 @@ class TestPeriodInventoryBoundary:
         """
         边界：查询单日区间 start_date == end_date。
         """
-        c = create_consumable(client, code='HC-SD', name='单日期间', initial_stock=0)
+        c = create_consumable(client, code='HC-SD', name='单日期间')
         cid = c['id']
 
         with app.app_context():
@@ -1001,7 +1048,7 @@ class TestPeriodInventoryBoundary:
         边界：查询区间内无任何出入库，但之前有记录。
         期初应该等于上一个期间结束时的期末值。
         """
-        c = create_consumable(client, code='HC-EP', name='空期间', initial_stock=0)
+        c = create_consumable(client, code='HC-EP', name='空期间')
         cid = c['id']
 
         with app.app_context():
@@ -1031,9 +1078,9 @@ class TestPeriodInventoryBoundary:
         """
         边界：出库超过入库导致期末为负数（数据不一致场景）。
         这在实际业务中不应该发生（出库时校验库存），但如果数据被修改可能产生。
-        验证公式计算的正确性，即使结果为负。
+        负数截断为0，避免界面显示不合理数据。
         """
-        c = create_consumable(client, code='HC-NEG', name='负数期末', initial_stock=0)
+        c = create_consumable(client, code='HC-NEG', name='负数期末')
         cid = c['id']
 
         with app.app_context():
@@ -1048,29 +1095,30 @@ class TestPeriodInventoryBoundary:
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
 
-        # 期初=0, 期间出库50, 期末 = 0 - 50 = -50
+        # 期初=0, 期间出库50, 期末 = max(0, 0-50) = 0
         assert item['initial_stock'] == 0
         assert item['period_outbound'] == 50
-        assert item['ending_stock'] == -50
+        assert item['ending_stock'] == 0
 
 
-class TestPeriodInventoryBatchCreatedAt:
-    """期间库存查询 - 初始库存批次创建时间影响归属"""
+class TestPeriodInventoryInboundTime:
+    """期间库存查询 - 入库记录时间影响归属"""
 
-    def test_initial_stock_created_before_period(self, client, app):
+    def test_inbound_before_period(self, client, app):
         """
-        初始库存批次在期间之前创建 → 归入期初。
-        耗材1月创建(initial_stock=100)，查6月期间：
+        入库记录在期间之前 → 归入期初。
+        1月入库100，查6月期间：
         期初=100，期间入库=0，期末=100。
         """
-        c = create_consumable(client, code='HC-IB', name='期初前批次', initial_stock=100)
+        c = create_consumable(client, code='HC-IB', name='期初前入库')
         cid = c['id']
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2026, 1, 15, 10, 0, 0)
-                _db.session.commit()
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=100, batch_number='LOT-INIT',
+                inbound_time=datetime(2026, 1, 15, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=100))
+            _db.session.commit()
 
         resp = client.get('/api/stock/period-inventory?start_date=2026-06-01&end_date=2026-06-30')
         data = resp.get_json()
@@ -1081,20 +1129,21 @@ class TestPeriodInventoryBatchCreatedAt:
         assert item['period_outbound'] == 0
         assert item['ending_stock'] == 100
 
-    def test_initial_stock_created_within_period(self, client, app):
+    def test_inbound_within_period(self, client, app):
         """
-        初始库存批次在期间内创建 → 归入期间入库，不计入期初。
-        耗材6月10日创建(initial_stock=100)，查6月期间：
+        入库记录在期间内 → 归入期间入库，不计入期初。
+        6月10日入库100，查6月期间：
         期初=0，期间入库=100，期末=100。
         """
-        c = create_consumable(client, code='HC-IW', name='期间内批次', initial_stock=100)
+        c = create_consumable(client, code='HC-IW', name='期间内入库')
         cid = c['id']
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2026, 6, 10, 10, 0, 0)
-                _db.session.commit()
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=100, batch_number='LOT-JUN',
+                inbound_time=datetime(2026, 6, 10, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-JUN', quantity=100))
+            _db.session.commit()
 
         resp = client.get('/api/stock/period-inventory?start_date=2026-06-01&end_date=2026-06-30')
         data = resp.get_json()
@@ -1105,20 +1154,21 @@ class TestPeriodInventoryBatchCreatedAt:
         assert item['period_outbound'] == 0
         assert item['ending_stock'] == 100
 
-    def test_initial_stock_created_after_period(self, client, app):
+    def test_inbound_after_period(self, client, app):
         """
-        初始库存批次在期间之后创建 → 不计入本期间（期初和期间入库都不算）。
-        耗材7月创建(initial_stock=100)，查6月期间：
+        入库记录在期间之后 → 不计入本期间（期初和期间入库都不算）。
+        7月入库100，查6月期间：
         期初=0，期间入库=0，期末=0。
         """
-        c = create_consumable(client, code='HC-IA', name='期间后批次', initial_stock=100)
+        c = create_consumable(client, code='HC-IA', name='期间后入库')
         cid = c['id']
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2026, 7, 15, 10, 0, 0)
-                _db.session.commit()
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=100, batch_number='LOT-JUL',
+                inbound_time=datetime(2026, 7, 15, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-JUL', quantity=100))
+            _db.session.commit()
 
         resp = client.get('/api/stock/period-inventory?start_date=2026-06-01&end_date=2026-06-30')
         data = resp.get_json()
@@ -1129,19 +1179,20 @@ class TestPeriodInventoryBatchCreatedAt:
         assert item['period_outbound'] == 0
         assert item['ending_stock'] == 0
 
-    def test_initial_stock_within_period_with_inbound(self, client, app):
+    def test_inbound_within_period_with_other_records(self, client, app):
         """
-        初始库存批次在期间内创建，同时期间内有正常入库和出库。
-        耗材6月5日创建(initial_stock=50)，6月入库30出库20：
-        期初=0，期间入库=50(initial)+30=80，期间出库=20，期末=60。
+        入库记录在期间内，同时期间内有其他入库和出库。
+        6月5日入库50，6月入库30出库20：
+        期初=0，期间入库=50+30=80，期间出库=20，期末=60。
         """
-        c = create_consumable(client, code='HC-IWI', name='期间内批次含入库', initial_stock=50)
+        c = create_consumable(client, code='HC-IWI', name='期间内入库含其他')
         cid = c['id']
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2026, 6, 5, 10, 0, 0)
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=50, batch_number='LOT-INIT',
+                inbound_time=datetime(2026, 6, 5, 10, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-INIT', quantity=50))
             _db.session.add(InboundRecord(
                 consumable_id=cid, quantity=30, batch_number='LOT-JUN',
                 inbound_time=datetime(2026, 6, 15, 10, 0, 0)))
@@ -1157,51 +1208,52 @@ class TestPeriodInventoryBatchCreatedAt:
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
 
-        # 期初=0(批次6月5日创建，在期间内)，期间入库=50(initial)+30=80
+        # 期初=0(入库都在6月期间内)，期间入库=50+30=80
         assert item['initial_stock'] == 0
         assert item['period_inbound'] == 80
         assert item['period_outbound'] == 20
         assert item['ending_stock'] == 60  # 0 + 80 - 20
 
-    def test_initial_stock_cross_period_boundary(self, client, app):
+    def test_inbound_on_period_start_date(self, client, app):
         """
-        初始库存批次创建时间恰好在期间起始日 → 归入期间入库（等于start_date算期间内）。
-        耗材6月1日创建(initial_stock=80)，查6月期间：
+        入库记录时间恰好在期间起始日 → 归入期间入库（等于start_date算期间内）。
+        6月1日入库80，查6月期间：
         期初=0，期间入库=80，期末=80。
         """
-        c = create_consumable(client, code='HC-ICB', name='期间起始日批次', initial_stock=80)
+        c = create_consumable(client, code='HC-ICB', name='期间起始日入库')
         cid = c['id']
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                # created_at 的日期部分为 2026-06-01，等于 start_date
-                init_batch.created_at = datetime(2026, 6, 1, 8, 0, 0)
-                _db.session.commit()
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=80, batch_number='LOT-START',
+                inbound_time=datetime(2026, 6, 1, 8, 0, 0)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-START', quantity=80))
+            _db.session.commit()
 
         resp = client.get('/api/stock/period-inventory?start_date=2026-06-01&end_date=2026-06-30')
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
 
-        # created_at 日期=2026-06-01 = start_date，6月1日不算"之前"(<)，归入期间入库
+        # inbound_time 日期=2026-06-01 = start_date，归入期间入库
         assert item['initial_stock'] == 0
         assert item['period_inbound'] == 80
         assert item['ending_stock'] == 80
 
-    def test_initial_stock_created_day_before_period(self, client, app):
+    def test_inbound_day_before_period(self, client, app):
         """
-        初始库存批次在期间前一天创建 → 归入期初。
-        耗材5月31日创建(initial_stock=80)，查6月期间：
+        入库记录在期间前一天 → 归入期初。
+        5月31日入库80，查6月期间：
         期初=80，期间入库=0，期末=80。
         """
-        c = create_consumable(client, code='HC-IDA', name='期间前日批次', initial_stock=80)
+        c = create_consumable(client, code='HC-IDA', name='期间前日入库')
         cid = c['id']
         with app.app_context():
-            init_batch = StockBatch.query.filter_by(
-                consumable_id=cid, batch_number='期初库存').first()
-            if init_batch:
-                init_batch.created_at = datetime(2026, 5, 31, 23, 59, 59)
-                _db.session.commit()
+            _db.session.add(InboundRecord(
+                consumable_id=cid, quantity=80, batch_number='LOT-PRE',
+                inbound_time=datetime(2026, 5, 31, 23, 59, 59)))
+            _db.session.add(StockBatch(
+                consumable_id=cid, batch_number='LOT-PRE', quantity=80))
+            _db.session.commit()
 
         resp = client.get('/api/stock/period-inventory?start_date=2026-06-01&end_date=2026-06-30')
         data = resp.get_json()
@@ -1211,34 +1263,26 @@ class TestPeriodInventoryBatchCreatedAt:
         assert item['period_inbound'] == 0
         assert item['ending_stock'] == 80
 
-    def test_no_initial_stock_batch_fallback(self, client, app):
+    def test_no_inbound_records_at_all(self, client, app):
         """
-        兼容性：没有"期初库存"批次但有initial_stock的旧数据，回退到旧逻辑（归入期初）。
+        兼容性：没有任何入库记录的耗材，期间库存全部为0。
         """
-        c = create_consumable(client, code='HC-NBF', name='无批次回退', initial_stock=0)
-        cid = c['id']
-        # 直接修改 consumable 的 initial_stock，不创建期初批次
-        with app.app_context():
-            consumable = Consumable.query.get(cid)
-            consumable.initial_stock = 60
-            _db.session.commit()
+        c = create_consumable(client, code='HC-NBF', name='无入库记录')
 
         resp = client.get('/api/stock/period-inventory?start_date=2026-06-01&end_date=2026-06-30')
         data = resp.get_json()
-        item = next(i for i in data['items'] if i['id'] == cid)
+        item = next(i for i in data['items'] if i['id'] == c['id'])
 
-        # 没有期初库存批次但有initial_stock → 回退旧逻辑，归入期初
-        assert item['initial_stock'] == 60
+        assert item['initial_stock'] == 0
         assert item['period_inbound'] == 0
-        assert item['ending_stock'] == 60
+        assert item['ending_stock'] == 0
 
-    def test_initial_stock_zero_ignores_batch_time(self, client, app):
+    def test_zero_quantity_inbound_ignored(self, client, app):
         """
-        initial_stock=0 时，不管批次创建时间，期初和期间入库都不计入0值。
+        没有入库记录的耗材，期间库存全部为0。
         """
-        c = create_consumable(client, code='HC-ISZ', name='零初始库存', initial_stock=0)
+        c = create_consumable(client, code='HC-ISZ', name='无入库耗材')
         cid = c['id']
-        # 虽然没有期初库存批次，但确保逻辑不会出错
         resp = client.get('/api/stock/period-inventory?start_date=2026-06-01&end_date=2026-06-30')
         data = resp.get_json()
         item = next(i for i in data['items'] if i['id'] == cid)
@@ -1278,17 +1322,18 @@ class TestInboundStockConsistency:
             ).filter(InboundRecord.consumable_id == cid).scalar()
             assert consumable.total_inbound == int(record_sum) == 80
 
-    def test_inbound_with_initial_stock(self, client, app):
-        """有期初库存时入库：总库存 = 期初批次 + 入库批次"""
-        c = create_consumable(client, code='HC-IB3', name='期初入库', initial_stock=100)
+    def test_multiple_inbound_stock(self, client, app):
+        """多次入库：总库存 = 所有入库批次之和"""
+        c = create_consumable(client, code='HC-IB3', name='多次入库')
         cid = c['id']
+        create_inbound(client, cid, quantity=100, batch_number='LOT-INIT')
         create_inbound(client, cid, quantity=50, batch_number='LOT001')
 
         with app.app_context():
             consumable = Consumable.query.get(cid)
-            # 期初库存会自动创建批次(batch_number='期初库存'), total_stock = 100 + 50
+            # 总库存 = 100 + 50 = 150
             assert consumable.total_stock == 150
-            # 验证有两个批次：期初批次 + 入库批次
+            # 验证有两个批次
             batches = StockBatch.query.filter_by(consumable_id=cid).all()
             assert len(batches) == 2
             batch_sum = sum(b.quantity for b in batches)
@@ -1386,9 +1431,10 @@ class TestOutboundStockConsistency:
             assert Consumable.query.get(cid).total_stock == 100
 
     def test_stock_formula_consistency(self, client, app):
-        """库存公式一致性：当前库存 = 所有批次之和 = 期初批次 + 入库批次 - 出库扣减"""
-        c = create_consumable(client, code='HC-OB5', name='公式一致', initial_stock=100)
+        """库存公式一致性：当前库存 = 所有批次之和 = 累计入库 - 累计出库"""
+        c = create_consumable(client, code='HC-OB5', name='公式一致')
         cid = c['id']
+        create_inbound(client, cid, quantity=100, batch_number='LOT-INIT')
         create_inbound(client, cid, quantity=50, batch_number='LOT001')
         create_inbound(client, cid, quantity=30, batch_number='LOT002')
         create_outbound(client, cid, quantity=40)
@@ -1398,10 +1444,11 @@ class TestOutboundStockConsistency:
             batch_sum = sum(b.quantity for b in StockBatch.query.filter_by(consumable_id=cid).all())
             # 总库存 = 批次之和
             assert consumable.total_stock == batch_sum
-            # 批次之和 = 期初(100) + 入库(50+30) - 出库(40) = 140
+            # 批次之和 = 入库(100+50+30) - 出库(40) = 140
             assert batch_sum == 140
-            # 验证 total_stock = initial_stock + total_inbound - total_outbound
-            assert consumable.total_stock == consumable.initial_stock + consumable.total_inbound - consumable.total_outbound
+            # total_inbound = 100+50+30 = 180
+            # 验证 total_stock = total_inbound - total_outbound
+            assert consumable.total_stock == consumable.total_inbound - consumable.total_outbound
 
     def test_full_outbound_then_zero_stock(self, client, app):
         """全部出库后库存为0"""

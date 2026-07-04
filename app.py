@@ -129,11 +129,13 @@ def _migrate_db(db_path):
             ('production_date', 'DATE'),
             ('expiry_date', 'DATE'),
             ('inbound_time', 'DATETIME'),
+            ('created_at', 'DATETIME'),
         ],
         'outbound_record': [
             ('document_number', 'VARCHAR(50)'),
             ('batch_detail', 'TEXT'),
             ('outbound_time', 'DATETIME'),
+            ('created_at', 'DATETIME'),
         ],
         'stock_batch': [
             ('storage_location', 'VARCHAR(200)'),
@@ -221,29 +223,6 @@ def _drop_document_number_unique(db_path):
     conn.close()
 
 
-def _patch_initial_stock_batches():
-    """为已有耗材补充期初库存批次：initial_stock > 0 且无'期初库存'批次时补建"""
-    from models import Consumable, StockBatch
-    patched = 0
-    for c in Consumable.query.filter(Consumable.initial_stock > 0).all():
-        exists = StockBatch.query.filter_by(
-            consumable_id=c.id, batch_number='期初库存'
-        ).first()
-        if not exists:
-            batch = StockBatch(
-                consumable_id=c.id,
-                batch_number='期初库存',
-                quantity=c.initial_stock,
-                storage_location=c.storage_location,
-                remark='系统自动创建（期初库存）',
-            )
-            db.session.add(batch)
-            patched += 1
-    if patched:
-        db.session.commit()
-        print(f'  ✅ 已为 {patched} 条耗材补充期初库存批次')
-
-
 def init_db(app):
     """初始化数据库（创建表 + 迁移 + 默认数据）"""
     with app.app_context():
@@ -256,8 +235,6 @@ def init_db(app):
         db.create_all()
         # 对已有数据库执行增量迁移
         _migrate_db(db_path)
-        # 为已有耗材补充期初库存批次（initial_stock > 0 但无对应批次时补建）
-        _patch_initial_stock_batches()
         # 首次运行时初始化默认科室
         if Department.query.count() == 0:
             defaults = ['门诊检验科', '住院部', '手术室', '急诊科', 'ICU', '儿科',
