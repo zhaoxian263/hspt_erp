@@ -178,7 +178,9 @@ def import_consumables():
                     skipped += 1
                     continue
                 elif update_mode == 'update':
-                    # 更新已有记录（留空字段不修改）
+                    # 更新已有记录（留空字段不修改）；若耗材已停用则自动恢复启用
+                    if existing.is_active is False:
+                        existing.is_active = True
                     if '耗材名称' in col_idx:
                         val = str(row.get(col_idx['耗材名称'], '')).strip()
                         if val:
@@ -269,7 +271,9 @@ def export_consumables():
     """导出耗材基础信息为 Excel"""
     import openpyxl
     keyword = request.args.get('keyword', '').strip()
-    query = Consumable.query
+    query = Consumable.query.filter(
+        db.or_(Consumable.is_active == True, Consumable.is_active.is_(None))  # noqa: E712
+    )
     if keyword:
         query = query.filter(
             db.or_(
@@ -303,7 +307,9 @@ def export_consumables():
 def export_inventory():
     """导出库存总览为 Excel"""
     import openpyxl
-    items = Consumable.query.order_by(Consumable.code).all()
+    items = Consumable.query.filter(
+        db.or_(Consumable.is_active == True, Consumable.is_active.is_(None))  # noqa: E712
+    ).order_by(Consumable.code).all()
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -410,10 +416,13 @@ def export_expiry_query():
 
     if keyword:
         query = query.join(Consumable, StockBatch.consumable_id == Consumable.id).filter(
-            db.or_(_ilike_filter(Consumable.code, keyword), _ilike_filter(Consumable.name, keyword))
+            db.or_(_ilike_filter(Consumable.code, keyword), _ilike_filter(Consumable.name, keyword)),
+            db.or_(Consumable.is_active == True, Consumable.is_active.is_(None)),  # noqa: E712
         )
     else:
-        query = query.join(Consumable, StockBatch.consumable_id == Consumable.id)
+        query = query.join(Consumable, StockBatch.consumable_id == Consumable.id).filter(
+            db.or_(Consumable.is_active == True, Consumable.is_active.is_(None)),  # noqa: E712
+        )
 
     if category:
         query = query.filter(Consumable.category == category)
@@ -518,6 +527,9 @@ def import_inbound():
             consumable = all_consumables.get(code)
             if not consumable:
                 errors.append(f'第{row_num}行: 耗材编号 {code} 不存在')
+                continue
+            if consumable.is_active is False:
+                errors.append(f'第{row_num}行: 耗材 {code} 已停用，跳过入库')
                 continue
 
             batch_number = str(row.get(col_idx.get('批号'), '')).strip()
@@ -634,6 +646,9 @@ def import_outbound():
             consumable = all_consumables.get(code)
             if not consumable:
                 errors.append(f'第{row_num}行: 耗材编号 {code} 不存在')
+                continue
+            if consumable.is_active is False:
+                errors.append(f'第{row_num}行: 耗材 {code} 已停用，跳过出库')
                 continue
 
             batch_number = str(row.get(col_idx.get('批号'), '')).strip()

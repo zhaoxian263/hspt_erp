@@ -12,6 +12,7 @@ const API = {
   consumables: '/api/consumables',
   consumableAll: '/api/consumables/all',
   consumable: id => `/api/consumables/${id}`,
+  consumableRestore: id => `/api/consumables/${id}/restore`,
   // 入库
   inbound: '/api/stock/inbound',
   inboundDel: id => `/api/stock/inbound/${id}`,
@@ -227,7 +228,7 @@ const DashboardPage = {
 const ConsumablePage = {
   data() {
     return {
-      items: [], total: 0, page: 1, pageSize: 20, keyword: '', categoryFilter: '',
+      items: [], total: 0, page: 1, pageSize: 20, keyword: '', categoryFilter: '', statusFilter: 'active',
       dialogVisible: false, dialogTitle: '新增耗材', form: {}, isEdit: false,
       categoryOptions: [],
     };
@@ -239,7 +240,7 @@ const ConsumablePage = {
   mounted() { this.loadData(); },
   methods: {
     async loadData() {
-      const params = new URLSearchParams({ page: this.page, page_size: this.pageSize, keyword: this.keyword, include_stock: 'true' });
+      const params = new URLSearchParams({ page: this.page, page_size: this.pageSize, keyword: this.keyword, include_stock: 'true', status: this.statusFilter });
       if (this.categoryFilter) params.set('category', this.categoryFilter);
       const res = await fetch(`${API.consumables}?${params}`);
       const data = await res.json();
@@ -267,10 +268,25 @@ const ConsumablePage = {
       else { const err = await res.json(); ElMessage.error(err.error || '保存失败'); }
     },
     async del(row) {
-      try { await ElMessageBox.confirm(`确定删除 "${row.name}" 吗？`, '提示', { type: 'warning' }); } catch { return; }
+      const tip = (row.total_stock > 0)
+        ? `"${row.name}" 当前库存为 ${row.total_stock}，需先出库清零才能删除。确定继续吗？`
+        : `确定删除 "${row.name}" 吗？\n若存在历史出入库记录，将自动转为「停用」状态（记录保留可追溯）。`;
+      try { await ElMessageBox.confirm(tip, '提示', { type: 'warning' }); } catch { return; }
       const res = await fetch(API.consumable(row.id), { method: 'DELETE' });
-      if (res.ok) { ElMessage.success('删除成功'); this.loadData(); }
-      else { const err = await res.json(); ElMessage.error(err.error || '删除失败'); }
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) {
+        ElMessage.success(body.message || '删除成功');
+        this.loadData();
+      } else {
+        ElMessage.error(body.error || '删除失败');
+      }
+    },
+    async restore(row) {
+      try { await ElMessageBox.confirm(`确定恢复启用 "${row.name}" 吗？`, '提示', { type: 'info' }); } catch { return; }
+      const res = await fetch(API.consumableRestore(row.id), { method: 'POST' });
+      const body = await res.json().catch(() => ({}));
+      if (res.ok) { ElMessage.success(body.message || '已恢复启用'); this.loadData(); }
+      else { ElMessage.error(body.error || '恢复失败'); }
     },
     stockTagType(s) { return s==='库存不足'?'danger': s==='库存预警'?'warning':'success'; },
     expiryTagType(s) { return s==='已过期'?'danger': s==='近效期'?'warning':'success'; },
@@ -285,6 +301,13 @@ const ConsumablePage = {
           <el-col :span="4">
             <el-select v-model="categoryFilter" placeholder="类别筛选" clearable @change="onSearch" style="width:100%">
               <el-option v-for="c in categoryOptions" :key="c.id" :label="c.name" :value="c.name" />
+            </el-select>
+          </el-col>
+          <el-col :span="3">
+            <el-select v-model="statusFilter" placeholder="状态" @change="onSearch" style="width:100%">
+              <el-option label="在用" value="active" />
+              <el-option label="已停用" value="inactive" />
+              <el-option label="全部" value="all" />
             </el-select>
           </el-col>
           <el-col :span="8">
@@ -302,6 +325,11 @@ const ConsumablePage = {
         <el-table-column prop="specification" label="规格型号" width="120" />
         <el-table-column prop="unit" label="单位" width="55" />
         <el-table-column prop="storage_location" label="存放位置" width="100" />
+        <el-table-column label="状态" width="70">
+          <template #default="{row}">
+            <el-tag :type="row.is_active === false ? 'info' : 'success'" size="small">{{ row.is_active === false ? '已停用' : '在用' }}</el-tag>
+          </template>
+        </el-table-column>
         <el-table-column prop="total_stock" label="库存" width="60" />
         <el-table-column label="库存状态" width="80">
           <template #default="{row}">
@@ -318,10 +346,13 @@ const ConsumablePage = {
         <el-table-column prop="remark" label="备注" min-width="120" show-overflow-tooltip />
         <el-table-column prop="created_at" label="创建时间" width="160" />
         <el-table-column prop="updated_at" label="修改时间" width="160" />
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="140" fixed="right">
           <template #default="{row}">
-            <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
-            <el-button link type="danger" size="small" @click="del(row)">删除</el-button>
+            <template v-if="row.is_active !== false">
+              <el-button link type="primary" size="small" @click="openEdit(row)">编辑</el-button>
+              <el-button link type="danger" size="small" @click="del(row)">删除</el-button>
+            </template>
+            <el-button v-else link type="success" size="small" @click="restore(row)">恢复启用</el-button>
           </template>
         </el-table-column>
       </el-table>

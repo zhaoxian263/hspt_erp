@@ -20,18 +20,18 @@ echo [1/3] 安装 Python 依赖...
 pip install -r requirements.txt pyinstaller --quiet
 
 :: 打包
+:: 说明：config.py / models / routes / utils 均为 app.py 的 import 依赖，PyInstaller 会自动打包，
+::       无需 --add-data；templates / static 是 Flask 非代码资源，必须手动指定。
 echo [2/3] 开始打包（这可能需要几分钟）...
 pyinstaller --noconfirm --onedir --name "安居镇中心卫生院护理部耗材管理系统" ^
     --add-data "templates;templates" ^
     --add-data "static;static" ^
-    --add-data "config.py;." ^
     --hidden-import="pandas" ^
     --hidden-import="openpyxl" ^
     app.py
 
-:: 复制必要文件
-echo [3/3] 复制配置文件...
-copy config.py dist\安居镇中心卫生院护理部耗材管理系统\ >nul 2>&1
+:: 准备数据库目录（首次运行时 init_db 会自动建表和 backups 子目录）
+echo [3/3] 准备数据库目录...
 if not exist "dist\安居镇中心卫生院护理部耗材管理系统\database" mkdir "dist\安居镇中心卫生院护理部耗材管理系统\database"
 
 echo.

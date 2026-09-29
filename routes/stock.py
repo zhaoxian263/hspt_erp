@@ -95,6 +95,8 @@ def create_inbound():
     consumable = Consumable.query.get(consumable_id)
     if not consumable:
         return jsonify({'error': '耗材不存在'}), 404
+    if consumable.is_active is False:
+        return jsonify({'error': f'耗材「{consumable.name}」已停用，无法入库。请先在耗材管理中恢复启用。'}), 400
 
     # 解析日期
     production_date = _parse_date(data.get('production_date'))
@@ -260,6 +262,8 @@ def create_outbound():
             consumable = Consumable.query.get(consumable_id)
             if not consumable:
                 return jsonify({'error': f'耗材ID {consumable_id} 不存在'}), 404
+            if consumable.is_active is False:
+                return jsonify({'error': f'耗材「{consumable.name}」已停用，无法出库。请先在耗材管理中恢复启用。'}), 400
             if consumable.total_stock < quantity:
                 return jsonify({'error': f'耗材 {consumable.name} 库存不足，当前 {consumable.total_stock}，申请 {quantity}'}), 400
 
@@ -345,6 +349,8 @@ def create_outbound():
         consumable = Consumable.query.get(consumable_id)
         if not consumable:
             return jsonify({'error': '耗材不存在'}), 404
+        if consumable.is_active is False:
+            return jsonify({'error': f'耗材「{consumable.name}」已停用，无法出库。请先在耗材管理中恢复启用。'}), 400
 
         if consumable.total_stock < quantity:
             return jsonify({'error': f'库存不足，当前库存 {consumable.total_stock}，申请出库 {quantity}'}), 400
@@ -514,16 +520,19 @@ def expiry_query():
     status = request.args.get('status', '').strip()
     category = request.args.get('category', '').strip()
 
-    # 查询所有有库存的批次，关联耗材信息
+    # 查询所有有库存的批次，关联耗材信息（仅用在耗材）
     query = StockBatch.query.filter(StockBatch.quantity > 0)
 
     # 关联耗材进行筛选
     if keyword:
         query = query.join(Consumable, StockBatch.consumable_id == Consumable.id).filter(
-            db.or_(_ilike_filter(Consumable.code, keyword), _ilike_filter(Consumable.name, keyword))
+            db.or_(_ilike_filter(Consumable.code, keyword), _ilike_filter(Consumable.name, keyword)),
+            db.or_(Consumable.is_active == True, Consumable.is_active.is_(None)),  # noqa: E712
         )
     else:
-        query = query.join(Consumable, StockBatch.consumable_id == Consumable.id)
+        query = query.join(Consumable, StockBatch.consumable_id == Consumable.id).filter(
+            db.or_(Consumable.is_active == True, Consumable.is_active.is_(None)),  # noqa: E712
+        )
 
     if category:
         query = query.filter(Consumable.category == category)
@@ -573,7 +582,9 @@ def list_inventory():
     status_filter = request.args.get('status', '').strip()  # all/normal/low_or_warning/expiry_warning/expired
     category = request.args.get('category', '').strip()
 
-    query = Consumable.query
+    query = Consumable.query.filter(
+        db.or_(Consumable.is_active == True, Consumable.is_active.is_(None))  # noqa: E712
+    )
     if keyword:
         query = query.filter(
             db.or_(
@@ -635,9 +646,12 @@ def list_inventory():
 def list_batches():
     """库存批次明细"""
     consumable_id = request.args.get('consumable_id', type=int)
-    query = StockBatch.query.filter(StockBatch.quantity > 0)
+    query = StockBatch.query.join(Consumable, StockBatch.consumable_id == Consumable.id).filter(
+        StockBatch.quantity > 0,
+        db.or_(Consumable.is_active == True, Consumable.is_active.is_(None)),  # noqa: E712
+    )
     if consumable_id:
-        query = query.filter_by(consumable_id=consumable_id)
+        query = query.filter(StockBatch.consumable_id == consumable_id)
     query = query.order_by(StockBatch.expiry_date.asc().nullslast())
     items = [b.to_dict(include_consumable=True) for b in query.all()]
     return jsonify({'items': items, 'total': len(items)})
@@ -654,7 +668,9 @@ def period_inventory():
     if not start_date or not end_date:
         return jsonify({'error': '请提供开始日期和结束日期'}), 400
 
-    query = Consumable.query
+    query = Consumable.query.filter(
+        db.or_(Consumable.is_active == True, Consumable.is_active.is_(None))  # noqa: E712
+    )
     if keyword:
         query = query.filter(
             db.or_(
@@ -713,7 +729,8 @@ def period_inventory():
 @stock_bp.route('/dashboard', methods=['GET'])
 def dashboard():
     """首页仪表盘数据"""
-    total_consumables = Consumable.query.count()
+    active_filter = db.or_(Consumable.is_active == True, Consumable.is_active.is_(None))  # noqa: E712
+    total_consumables = Consumable.query.filter(active_filter).count()
     total_inbound = db.session.query(db.func.sum(InboundRecord.quantity)).scalar() or 0
     total_outbound = db.session.query(db.func.sum(OutboundRecord.quantity)).scalar() or 0
     total_stock = db.session.query(db.func.sum(StockBatch.quantity)).scalar() or 0
@@ -721,12 +738,13 @@ def dashboard():
     # 库存预警：用批量聚合查询替代逐条访问计算属性
     warning_items = []
     expired_items = []
-    # 一次性获取所有耗材的预警值和库存总量
+    # 一次性获取所有在用耗材的预警值和库存总量
     consumable_stock = db.session.query(
         Consumable.id, Consumable.code, Consumable.name,
         Consumable.stock_warning_value, Consumable.expiry_warning_days,
         db.func.coalesce(db.func.sum(StockBatch.quantity), 0).label('total_stock'),
     ).outerjoin(StockBatch, StockBatch.consumable_id == Consumable.id) \
+     .filter(active_filter) \
      .group_by(Consumable.id).all()
 
     for c_id, code, name, warning_val, expiry_days, stock_qty in consumable_stock:
@@ -758,8 +776,9 @@ def dashboard():
         StockBatch.expiry_date.isnot(None),
     ).group_by(StockBatch.consumable_id).all()
 
-    # 建立 consumable_id → (expiry_warning_days, code, name) 映射
-    consumable_map = {c.id: (c.expiry_warning_days, c.code, c.name) for c in Consumable.query.all()}
+    # 建立 consumable_id → (expiry_warning_days, code, name) 映射（仅在用耗材）
+    consumable_map = {c.id: (c.expiry_warning_days, c.code, c.name)
+                      for c in Consumable.query.filter(active_filter).all()}
     for cid, nearest in expiry_batches:
         if nearest is None or cid not in consumable_map:
             continue

@@ -56,9 +56,13 @@ def update_category(cat_id):
 def delete_category(cat_id):
     """删除类别"""
     cat = Category.query.get_or_404(cat_id)
-    consumable_count = Consumable.query.filter_by(category=cat.name).count()
+    # 仅统计在用耗材（已停用耗材不阻止类别删除）
+    consumable_count = Consumable.query.filter(
+        Consumable.category == cat.name,
+        db.or_(Consumable.is_active == True, Consumable.is_active.is_(None)),  # noqa: E712
+    ).count()
     if consumable_count > 0:
-        return jsonify({'error': f'该类别下存在 {consumable_count} 个耗材，无法删除'}), 400
+        return jsonify({'error': f'该类别下存在 {consumable_count} 个在用耗材，无法删除'}), 400
     db.session.delete(cat)
     db.session.commit()
     return jsonify({'message': '删除成功'})

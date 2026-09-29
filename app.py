@@ -120,6 +120,7 @@ def _migrate_db(db_path):
             ('initial_stock', 'INTEGER DEFAULT 0'),
             ('manufacturer', 'VARCHAR(200)'),
             ('remark', 'TEXT'),
+            ('is_active', 'BOOLEAN DEFAULT 1'),
             ('created_at', 'DATETIME'),
             ('updated_at', 'DATETIME'),
         ],
@@ -129,13 +130,11 @@ def _migrate_db(db_path):
             ('production_date', 'DATE'),
             ('expiry_date', 'DATE'),
             ('inbound_time', 'DATETIME'),
-            ('created_at', 'DATETIME'),
         ],
         'outbound_record': [
             ('document_number', 'VARCHAR(50)'),
             ('batch_detail', 'TEXT'),
             ('outbound_time', 'DATETIME'),
-            ('created_at', 'DATETIME'),
         ],
         'stock_batch': [
             ('storage_location', 'VARCHAR(200)'),
@@ -223,6 +222,29 @@ def _drop_document_number_unique(db_path):
     conn.close()
 
 
+def _patch_initial_stock_batches():
+    """为已有耗材补充期初库存批次：initial_stock > 0 且无'期初库存'批次时补建"""
+    from models import Consumable, StockBatch
+    patched = 0
+    for c in Consumable.query.filter(Consumable.initial_stock > 0).all():
+        exists = StockBatch.query.filter_by(
+            consumable_id=c.id, batch_number='期初库存'
+        ).first()
+        if not exists:
+            batch = StockBatch(
+                consumable_id=c.id,
+                batch_number='期初库存',
+                quantity=c.initial_stock,
+                storage_location=c.storage_location,
+                remark='系统自动创建（期初库存）',
+            )
+            db.session.add(batch)
+            patched += 1
+    if patched:
+        db.session.commit()
+        print(f'  ✅ 已为 {patched} 条耗材补充期初库存批次')
+
+
 def init_db(app):
     """初始化数据库（创建表 + 迁移 + 默认数据）"""
     with app.app_context():
@@ -235,6 +257,8 @@ def init_db(app):
         db.create_all()
         # 对已有数据库执行增量迁移
         _migrate_db(db_path)
+        # 为已有耗材补充期初库存批次（initial_stock > 0 但无对应批次时补建）
+        _patch_initial_stock_batches()
         # 首次运行时初始化默认科室
         if Department.query.count() == 0:
             defaults = ['门诊检验科', '住院部', '手术室', '急诊科', 'ICU', '儿科',
@@ -269,9 +293,31 @@ def init_db(app):
             print(f'✅ 数据库已备份 → {backup_path}')
 
 
+def _pick_port(default=5000, max_try=20):
+    """选择可用端口：优先用环境变量 ERP_PORT 指定的端口；
+    若被占用则自动递增寻找可用端口，最多尝试 max_try 个。"""
+    import socket
+    try:
+        start = int(os.environ.get('ERP_PORT', default))
+    except (ValueError, TypeError):
+        start = default
+    for offset in range(max_try):
+        port = start + offset
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(('0.0.0.0', port))
+                return port
+            except OSError:
+                continue
+    # 全部占用时回退到默认端口（让 Flask 自己报错提示）
+    return start
+
+
 if __name__ == '__main__':
     app = create_app()
     init_db(app)
-    print('🏥 安居镇中心卫生院护理部耗材管理系统已启动 → http://localhost:5000')
+    port = _pick_port()
+    print(f'🏥 安居镇中心卫生院护理部耗材管理系统已启动 → http://localhost:{port}')
     # use_reloader=False 防止双进程并发写 SQLite 导致数据库损坏
-    app.run(host='0.0.0.0', port=5000, debug=True, use_reloader=False)
+    app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)

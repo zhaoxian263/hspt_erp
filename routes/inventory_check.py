@@ -32,8 +32,10 @@ def create_check():
     db.session.add(check)
     db.session.flush()  # 获取 check.id
 
-    # 自动填充所有耗材的系统库存
-    consumables = Consumable.query.order_by(Consumable.code).all()
+    # 自动填充所有在用耗材的系统库存（已停用耗材不参与盘点）
+    consumables = Consumable.query.filter(
+        db.or_(Consumable.is_active == True, Consumable.is_active.is_(None))  # noqa: E712
+    ).order_by(Consumable.code).all()
     for c in consumables:
         item = InventoryCheckItem(
             check_id=check.id,

@@ -66,6 +66,7 @@ class Consumable(db.Model):
     stock_warning_value = db.Column(db.Integer, default=0, comment='库存预警值')
     expiry_warning_days = db.Column(db.Integer, default=0, comment='近效期预警天数')
     remark = db.Column(db.Text, nullable=True, comment='备注')
+    is_active = db.Column(db.Boolean, default=True, nullable=False, comment='是否启用（False=已停用/软删除）')
     created_at = db.Column(db.DateTime, default=datetime.now)
     updated_at = db.Column(db.DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -148,6 +149,7 @@ class Consumable(db.Model):
             'stock_warning_value': self.stock_warning_value,
             'expiry_warning_days': self.expiry_warning_days,
             'remark': self.remark,
+            'is_active': self.is_active if self.is_active is not None else True,
             'created_at': self.created_at.strftime('%Y-%m-%d %H:%M:%S') if self.created_at else None,
             'updated_at': self.updated_at.strftime('%Y-%m-%d %H:%M:%S') if self.updated_at else None,
         }

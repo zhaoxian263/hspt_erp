@@ -13,8 +13,14 @@ def list_consumables():
     keyword = request.args.get('keyword', '').strip()
     category = request.args.get('category', '').strip()
     include_stock = request.args.get('include_stock', 'false').lower() == 'true'
+    # 状态筛选：active(默认,仅在用) / inactive(仅已停用) / all(全部)
+    status = request.args.get('status', 'active').strip()
 
     query = Consumable.query
+    if status == 'inactive':
+        query = query.filter(Consumable.is_active == False)  # noqa: E712
+    elif status != 'all':
+        query = query.filter(db.or_(Consumable.is_active == True, Consumable.is_active.is_(None)))  # noqa: E712
     if keyword:
         query = query.filter(
             db.or_(
@@ -101,25 +107,50 @@ def update_consumable(consumable_id):
 
 @consumable_bp.route('/<int:consumable_id>', methods=['DELETE'])
 def delete_consumable(consumable_id):
-    """删除耗材（有库存或历史记录时拒绝删除）"""
+    """删除耗材（智能模式）：
+    - 有库存：拒绝，需先出库清零
+    - 无任何历史记录：物理删除
+    - 有历史记录但库存为0：转为停用（软删除），历史记录保留可追溯
+    """
     c = Consumable.query.get_or_404(consumable_id)
+    if c.is_active is False:
+        return jsonify({'error': '该耗材已处于停用状态，无需重复操作'}), 400
     # 检查是否有库存
     if c.total_stock > 0:
         return jsonify({'error': '该耗材仍有库存，无法删除。请先出库清零后再删除。'}), 400
     # 检查是否有入库/出库历史记录
     inbound_count = InboundRecord.query.filter_by(consumable_id=consumable_id).count()
-    if inbound_count > 0:
-        return jsonify({'error': f'该耗材存在 {inbound_count} 条入库记录，无法删除。历史记录需保留以供追溯。'}), 400
     outbound_count = OutboundRecord.query.filter_by(consumable_id=consumable_id).count()
-    if outbound_count > 0:
-        return jsonify({'error': f'该耗材存在 {outbound_count} 条出库记录，无法删除。历史记录需保留以供追溯。'}), 400
+    if inbound_count > 0 or outbound_count > 0:
+        # 有历史记录：软删除（停用），保留追溯数据
+        c.is_active = False
+        db.session.commit()
+        return jsonify({
+            'message': f'该耗材存在 {inbound_count} 条入库记录、{outbound_count} 条出库记录，'
+                       f'已转为「停用」状态（历史记录保留可追溯）。',
+            'soft_deleted': True,
+        })
+    # 无历史记录：物理删除
     db.session.delete(c)
     db.session.commit()
-    return jsonify({'message': '删除成功'})
+    return jsonify({'message': '删除成功', 'soft_deleted': False})
+
+
+@consumable_bp.route('/<int:consumable_id>/restore', methods=['POST'])
+def restore_consumable(consumable_id):
+    """恢复已停用的耗材"""
+    c = Consumable.query.get_or_404(consumable_id)
+    if c.is_active is not False:
+        return jsonify({'error': '该耗材未停用，无需恢复'}), 400
+    c.is_active = True
+    db.session.commit()
+    return jsonify({'message': '已恢复启用', 'consumable': c.to_dict()})
 
 
 @consumable_bp.route('/all', methods=['GET'])
 def list_all_consumables():
-    """获取所有耗材（下拉选择用，不分页）"""
-    items = Consumable.query.order_by(Consumable.code).all()
+    """获取所有在用耗材（下拉选择用，不分页，不含已停用）"""
+    items = Consumable.query.filter(
+        db.or_(Consumable.is_active == True, Consumable.is_active.is_(None))  # noqa: E712
+    ).order_by(Consumable.code).all()
     return jsonify([c.to_dict() for c in items])
